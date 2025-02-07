@@ -19,10 +19,9 @@ with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as 
         image.flags.writeable=True
         image=cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        print(results)
+        mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
 
-
-        cv2.imshow('Real Steel Motion Detection', frame)
+        cv2.imshow('Real Steel Motion Detection', image)
 
         if cv2.waitKey(10) & 0xFF == ord('q'):
             break
