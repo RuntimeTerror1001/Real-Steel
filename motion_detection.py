@@ -1,93 +1,97 @@
-import cv2 
+import cv2
 import mediapipe as mp
 import numpy as np
+import open3d as o3d
 
+# Initialize MediaPipe Pose
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 
-def normalize_coords(landmarks, width, height):
-    left_shldr = np.array([landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].x * width, 
-                           landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER].y*height])
-    
-    right_shldr = np.array([landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].x * width, 
-                           landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER].y*height])
-    
-    center = (left_shldr+right_shldr)/2
+# Initialize Open3D for 3D rendering
+def initialize_3d_visualizer():
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name='3D Humanoid Motion', width=800, height=600)
+    return vis
 
-    norm_landmarks = []
-    for landmark in landmarks:
-        x,y = (landmark.x * width) - center[0], height - (landmark.y * height) - center[1]  
-        norm_landmarks.append((x,y)) 
+# Function to update the 3D humanoid figure based on landmarks
+def update_3d_humanoid(vis, landmarks_3d, connections):
+    # Clear previous frame
+    vis.clear_geometries()
 
-    return np.array(norm_landmarks)
+    # Create point cloud for landmarks
+    points = o3d.utility.Vector3dVector(landmarks_3d)
+    point_cloud = o3d.geometry.PointCloud(points)
+    point_cloud.paint_uniform_color([1, 0, 0])  # Red color for points
 
-def rotate_landmarks(landmarks, angle):
-    rotation_matrix = np.array([
-        [np.cos(angle),-np.sin(angle)],
-        [np.sin(angle), np.cos(angle)]
-    ])
+    # Create lines for connections
+    lines = o3d.utility.Vector2iVector(connections)
+    line_set = o3d.geometry.LineSet()
+    line_set.points = points
+    line_set.lines = lines
+    line_set.paint_uniform_color([0, 1, 0])  # Green color for lines
 
-    rotated_landmarks = np.dot(landmarks, rotation_matrix)
-    return rotated_landmarks 
+    # Add geometries to the visualizer
+    vis.add_geometry(point_cloud)
+    vis.add_geometry(line_set)
 
-cap=cv2.VideoCapture(0)
+    # Update the visualizer
+    vis.update_geometry(point_cloud)
+    vis.update_geometry(line_set)
+    vis.poll_events()
+    vis.update_renderer()
 
-with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
-    while cap.isOpened():
-        ret, frame = cap.read()
-        height, width, _ = frame.shape
+# Main loop
+def main():
+    cap = cv2.VideoCapture(0)
+    vis = initialize_3d_visualizer()
 
-        original_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        original_frame.flags.writeable=False
+    with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        results = pose.process(original_frame)
+            # Process the frame with MediaPipe Pose
+            height, width, _ = frame.shape
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image.flags.writeable = False
+            results = pose.process(image)
+            image.flags.writeable = True
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        original_frame.flags.writeable=True
-        original_frame=cv2.cvtColor(original_frame, cv2.COLOR_RGB2BGR)
+            if results.pose_landmarks:
+                # Extract 3D landmarks
+                landmarks_3d = np.array([[lm.x, lm.y, lm.z] for lm in results.pose_landmarks.landmark])
 
-        processed_frame = np.zeros_like(original_frame)
+                # Rotate to frontal view (optional, based on shoulder angle)
+                left_shoulder = landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+                right_shoulder = landmarks_3d[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+                shoulder_vector = right_shoulder - left_shoulder
+                angle = np.arctan2(shoulder_vector[1], shoulder_vector[0])
 
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
+                rotation_matrix = np.array([
+                    [np.cos(-angle), -np.sin(-angle), 0],
+                    [np.sin(-angle), np.cos(-angle), 0],
+                    [0, 0, 1]
+                ])
+                landmarks_3d = np.dot(landmarks_3d, rotation_matrix)
 
-            norm_landmarks = normalize_coords(landmarks, width, height)
+                # Convert POSE_CONNECTIONS to a NumPy array of shape (N, 2)
+                connections = np.array([[conn[0], conn[1]] for conn in mp_pose.POSE_CONNECTIONS])
 
-            left_shoulder = norm_landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-            right_shoulder = norm_landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-            shoulder_vector = right_shoulder - left_shoulder
-            angle = np.arctan2(shoulder_vector[1], shoulder_vector[0])
+                # Update the 3D humanoid figure
+                update_3d_humanoid(vis, landmarks_3d, connections)
 
-            rotated_landmarks = rotate_landmarks(norm_landmarks, -angle)
+            # Display the original frame
+            cv2.imshow('Real-Time Motion Detection', image)
 
-            for connection in mp_pose.POSE_CONNECTIONS:
-                start_idx, end_idx = connection
-
-                if start_idx < len(rotated_landmarks) and end_idx < len(rotated_landmarks):
-                    x1, y1 = rotated_landmarks[start_idx]
-                    x2, y2 = rotated_landmarks[end_idx]
-
-                    if not np.isnan(x1) and not np.isnan(y1) and not np.isnan(x2) and not np.isnan(y2):
-                        cv2.line(processed_frame, 
-                                (int(x1 + width // 2), int(y1 + height // 2)), 
-                                (int(x2 + width // 2), int(y2 + height // 2)), 
-                                (0, 0, 255), 3)
-
-            # Ensure valid keypoints before drawing circles
-            for x, y in rotated_landmarks:
-                if not np.isnan(x) and not np.isnan(y):
-                    cv2.circle(processed_frame, (int(x + width // 2), int(y + height // 2)), 5, (0, 255, 0), -1)
-
-
-            combined_frame = np.hstack((original_frame, processed_frame))
-
-            combined_frame = cv2.resize(combined_frame, (width*2, height))
-
-        mp_drawing.draw_landmarks(original_frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-
-        cv2.imshow('Real Steel Motion Detection', combined_frame)
-
-        if cv2.waitKey(10) & 0xFF == ord('q'):
-            break
+            # Exit on 'q' key press
+            if cv2.waitKey(10) & 0xFF == ord('q'):
+                break
 
     cap.release()
     cv2.destroyAllWindows()
+    vis.destroy_window()
+
+if __name__ == "__main__":
+    main()
