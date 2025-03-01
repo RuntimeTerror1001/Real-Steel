@@ -2,6 +2,8 @@ import cv2
 import mediapipe as mp
 import pygame
 import matplotlib.pyplot as plt
+import numpy as np
+import math
 
 class PoseMirror3D:
     def __init__(self, window_size=(640, 480)):
@@ -19,7 +21,7 @@ class PoseMirror3D:
         pygame.init()
         self.window_size = window_size
         self.screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("3D Pose Mirror")
+        pygame.display.set_caption("3D Pose Mirror - Body Plane Stabilized")
         
         # Initialize matplotlib for 3D visualization
         plt.ion()  # Enable interactive mode
@@ -50,12 +52,80 @@ class PoseMirror3D:
         self.font = pygame.font.Font(None, 36)
         self.scale = 200
         
+        # Store the current rotation angle with a sensible default
+        self.current_rotation_angle = 0
+        self.initial_angle_set = False
+        self.angle_offset = 0
+        
+        # Smoothing factor for angle (higher = more smoothing)
+        self.smoothing_factor = 0.8
+        
+        # Maintain a history of recent chest vectors for stability
+        self.recent_chest_vectors = []
+        self.max_history = 5  # Number of frames to keep in history
+        
+    def calculate_body_plane_angle(self, landmarks):
+        """Calculate the angle between the body plane and camera plane using chest orientation"""
+        if not landmarks:
+            return 0
+        
+        # Get key upper body landmarks
+        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        
+        # We'll also use the nose as a reference point for the front of the body
+        nose = landmarks[self.mp_pose.PoseLandmark.NOSE.value]
+        
+        # Calculate the midpoint between shoulders (represents the center of the chest)
+        chest_mid_x = (left_shoulder.x + right_shoulder.x) / 2
+        chest_mid_y = (left_shoulder.y + right_shoulder.y) / 2
+        chest_mid_z = (left_shoulder.z + right_shoulder.z) / 2
+        
+        # Calculate a vector pointing from the chest outward (normal to the chest plane)
+        # This uses the nose and chest midpoint to approximate the chest direction
+        chest_to_nose_x = nose.x - chest_mid_x
+        chest_to_nose_z = nose.z - chest_mid_z
+        
+        # Normalize this vector
+        magnitude = math.sqrt(chest_to_nose_x**2 + chest_to_nose_z**2)
+        if magnitude > 0:
+            chest_to_nose_x /= magnitude
+            chest_to_nose_z /= magnitude
+        
+        # Add to history for smoothing
+        self.recent_chest_vectors.append((chest_to_nose_x, chest_to_nose_z))
+        if len(self.recent_chest_vectors) > self.max_history:
+            self.recent_chest_vectors.pop(0)
+        
+        # Average the recent vectors for stability
+        avg_x = sum(v[0] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
+        avg_z = sum(v[1] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
+        
+        # Calculate the angle between this chest normal vector and the camera's z-axis
+        # When facing the camera, the chest normal should be parallel to the z-axis
+        raw_angle = math.degrees(math.atan2(avg_x, avg_z))
+        
+        # Set an initial reference angle if not set
+        if not self.initial_angle_set:
+            # Only calibrate when the person is reasonably stable and detected well
+            if len(self.recent_chest_vectors) >= 3:  # Wait for enough history
+                self.angle_offset = raw_angle
+                self.initial_angle_set = True
+            
+        # Calculate relative angle from initial position
+        relative_angle = raw_angle - self.angle_offset
+        
+        # Apply smoothing to prevent jittering (weighted moving average)
+        self.current_rotation_angle = self.current_rotation_angle * self.smoothing_factor + relative_angle * (1 - self.smoothing_factor)
+        
+        return self.current_rotation_angle
+        
     def update_3d_plot(self, results):
-        """Update the 3D matplotlib visualization"""
+        """Update the 3D matplotlib visualization with rotation compensation"""
         self.ax.clear()
         
         # Set up the 3D axes
-        self.ax.set_xlabel('Z')  # Swap axes for forward-facing orientation
+        self.ax.set_xlabel('Z')
         self.ax.set_ylabel('X')
         self.ax.set_zlabel('Y')
         
@@ -68,11 +138,42 @@ class PoseMirror3D:
         self.ax.grid(True)
         
         if results.pose_world_landmarks:
-            # Extract landmark coordinates and remap for forward-facing orientation
+            # Calculate body rotation angle
+            rotation_angle = self.calculate_body_plane_angle(results.pose_world_landmarks.landmark)
+            
+            # Extract landmark coordinates 
             landmarks = results.pose_world_landmarks.landmark
-            x = [-landmark.z for landmark in landmarks]  # Negative Z for x-axis
-            y = [landmark.x for landmark in landmarks]   # X for y-axis
-            z = [-landmark.y for landmark in landmarks]  # Negative Y for z-axis
+            
+            # Apply rotation to compensate for body turning
+            # Convert angle to radians for numpy functions
+            angle_rad = math.radians(rotation_angle)
+            rotation_matrix = np.array([
+                [math.cos(angle_rad), -math.sin(angle_rad)],
+                [math.sin(angle_rad), math.cos(angle_rad)]
+            ])
+            
+            # Extract, transform, and remap coordinates
+            transformed_points = []
+            for landmark in landmarks:
+                # Get original coordinates
+                orig_x = -landmark.z  # Convert MediaPipe's z-forward to our x-forward
+                orig_y = landmark.x   # MediaPipe's x to our y
+                
+                # Apply rotation matrix to x and y coordinates
+                # This counteracts the person's rotation
+                point = np.array([orig_x, orig_y])
+                rotated = np.dot(rotation_matrix, point)
+                
+                transformed_points.append({
+                    'x': rotated[0],
+                    'y': rotated[1],
+                    'z': -landmark.y  # Convert MediaPipe's y to our z (up)
+                })
+            
+            # Extract coordinates for plotting
+            x = [point['x'] for point in transformed_points]
+            y = [point['y'] for point in transformed_points]
+            z = [point['z'] for point in transformed_points]
             
             # Plot landmarks
             self.ax.scatter(x, y, z, c='r', marker='o')
@@ -81,9 +182,10 @@ class PoseMirror3D:
             for connection in self.mp_pose.POSE_CONNECTIONS:
                 start_idx = connection[0]
                 end_idx = connection[1]
-                self.ax.plot([x[start_idx], x[end_idx]],
-                           [y[start_idx], y[end_idx]],
-                           [z[start_idx], z[end_idx]], 'b-')
+                if start_idx < len(x) and end_idx < len(x):  # Check bounds
+                    self.ax.plot([x[start_idx], x[end_idx]],
+                               [y[start_idx], y[end_idx]],
+                               [z[start_idx], z[end_idx]], 'b-')
         
         # Maintain view angle
         self.ax.view_init(elev=0, azim=0)
@@ -105,6 +207,10 @@ class PoseMirror3D:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.pose.process(frame_rgb)
             
+            rotation_angle = 0
+            if results.pose_world_landmarks:
+                rotation_angle = self.calculate_body_plane_angle(results.pose_world_landmarks.landmark)
+            
             # Update main pygame window
             if results.pose_landmarks:
                 # Draw landmarks on frame
@@ -120,6 +226,36 @@ class PoseMirror3D:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_surface = pygame.surfarray.make_surface(frame_rgb.swapaxes(0,1))
                 self.screen.blit(frame_surface, (0,0))
+                
+                # Render rotation angle on screen
+                angle_text = self.font.render(f"Rotation: {rotation_angle:.1f}°", True, self.RED)
+                self.screen.blit(angle_text, (10, 10))
+                
+                # Render direction indicator
+                direction = "Right" if rotation_angle > 10 else "Left" if rotation_angle < -10 else "Center"
+                direction_text = self.font.render(f"Facing: {direction}", True, self.BLUE)
+                self.screen.blit(direction_text, (10, 50))
+                
+                # Render calibration status
+                calibration_text = self.font.render(
+                    "Calibrated" if self.initial_angle_set else "Calibrating... face camera", 
+                    True, 
+                    (0, 255, 0) if self.initial_angle_set else (255, 165, 0)
+                )
+                self.screen.blit(calibration_text, (10, 90))
+                
+                # Draw chest direction vector on screen for debugging
+                if self.recent_chest_vectors:
+                    center_x, center_y = self.window_size[0] - 100, 100
+                    avg_x = sum(v[0] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
+                    avg_z = sum(v[1] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
+                    line_length = 50
+                    end_x = center_x + avg_x * line_length
+                    end_y = center_y + avg_z * line_length
+                    pygame.draw.circle(self.screen, self.BLACK, (center_x, center_y), 52)
+                    pygame.draw.circle(self.screen, self.WHITE, (center_x, center_y), 50)
+                    pygame.draw.line(self.screen, self.RED, (center_x, center_y), (end_x, end_y), 3)
+                
                 pygame.display.flip()
             
             # Update 3D visualization
@@ -132,8 +268,10 @@ class PoseMirror3D:
                     running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_r:
-                        # Reset view to forward-facing
-                        self.ax.view_init(elev=0, azim=90)
+                        # Reset calibration
+                        self.initial_angle_set = False
+                        self.current_rotation_angle = 0
+                        self.recent_chest_vectors = []
                     elif event.key == pygame.K_q:
                         running = False
                     # View control keys
