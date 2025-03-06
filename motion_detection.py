@@ -82,7 +82,6 @@ class PoseMirror3D:
         chest_mid_z = (left_shoulder.z + right_shoulder.z) / 2
         
         # Calculate a vector pointing from the chest outward (normal to the chest plane)
-        # This uses the nose and chest midpoint to approximate the chest direction
         chest_to_nose_x = nose.x - chest_mid_x
         chest_to_nose_z = nose.z - chest_mid_z
         
@@ -102,7 +101,6 @@ class PoseMirror3D:
         avg_z = sum(v[1] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
         
         # Calculate the angle between this chest normal vector and the camera's z-axis
-        # When facing the camera, the chest normal should be parallel to the z-axis
         raw_angle = math.degrees(math.atan2(avg_x, avg_z))
         
         # Set an initial reference angle if not set
@@ -115,9 +113,22 @@ class PoseMirror3D:
         # Calculate relative angle from initial position
         relative_angle = raw_angle - self.angle_offset
         
+        # Normalize the angle to stay within -180 to 180 degrees
+        # This prevents the 300+ degree jumps
+        while relative_angle > 180:
+            relative_angle -= 360
+        while relative_angle < -180:
+            relative_angle += 360
+        
         # Apply smoothing to prevent jittering (weighted moving average)
         self.current_rotation_angle = self.current_rotation_angle * self.smoothing_factor + relative_angle * (1 - self.smoothing_factor)
         
+        # Apply another normalization after smoothing
+        while self.current_rotation_angle > 180:
+            self.current_rotation_angle -= 360
+        while self.current_rotation_angle < -180:
+            self.current_rotation_angle += 360
+            
         return self.current_rotation_angle
         
     def update_3d_plot(self, results):
