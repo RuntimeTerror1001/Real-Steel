@@ -9,7 +9,7 @@ import time
 from robot_retargeter import RobotRetargeter
 
 class PoseMirror3DWithRetargeting:
-    def __init__(self, window_size=(640, 480)):
+    def __init__(self, window_size=(1280, 720)):
         self.mp_pose = mp.solutions.pose
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_drawing_styles = mp.solutions.drawing_styles
@@ -130,7 +130,11 @@ class PoseMirror3DWithRetargeting:
             
         # Calculate relative angle from initial position
         relative_angle = raw_angle - self.angle_offset
-        
+
+        # Ignore small angles (create a dead zone)
+        if abs(relative_angle) < 10:  # 5 degrees dead zone
+            relative_angle = 0
+                
         # Normalize angle to stay within -180 to 180 degrees
         while relative_angle > 180:
             relative_angle -= 360
@@ -187,8 +191,6 @@ class PoseMirror3DWithRetargeting:
         ]
         print(f"Forward vector (chest to nose): [{forward_vector[0]:.4f}, {forward_vector[1]:.4f}, {forward_vector[2]:.4f}]")
         
-        # Call this method in your run loop where results.pose_world_landmarks is checked
-        
     def update_3d_plot(self, results):
         """
         Visualization with correct mapping based on debug output.
@@ -206,8 +208,8 @@ class PoseMirror3DWithRetargeting:
         
         # Set up the 3D axes
         self.ax.set_xlabel('X (Left-Right)')
-        self.ax.set_ylabel('Y (Up-Down)')
-        self.ax.set_zlabel('Z (Forward-Back)')
+        self.ax.set_ylabel('Z (Forward-Back)')
+        self.ax.set_zlabel('Y (Up-Down)')
         
         # Set fixed limits
         self.ax.set_xlim3d(-1, 1)
@@ -248,10 +250,10 @@ class PoseMirror3DWithRetargeting:
         self.ax.view_init(elev=15, azim=270)
         
         # Add coordinate axis markers
-        origin = [0, 0, 0]
-        self.ax.quiver(*origin, 0.2, 0, 0, color='r', label='X')
-        self.ax.quiver(*origin, 0, 0.2, 0, color='g', label='Y')
-        self.ax.quiver(*origin, 0, 0, 0.2, color='b', label='Z')
+        # origin = [0, 0, 0]
+        # self.ax.quiver(*origin, 0.2, 0, 0, color='r', label='X')
+        # self.ax.quiver(*origin, 0, 0.2, 0, color='g', label='Y')
+        # self.ax.quiver(*origin, 0, 0, 0.2, color='b', label='Z')
         
         # Update the plot
         self.fig.canvas.draw()

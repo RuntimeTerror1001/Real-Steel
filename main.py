@@ -9,10 +9,6 @@ import os
 import argparse
 from datetime import datetime
 
-# Import the main classes
-# If using separate files, you'd import them here
-# from pose_mirror import PoseMirror3D
-# from robot_retargeter import RobotRetargeter 
 from pose_mirror_retargeting import PoseMirror3DWithRetargeting
 
 def main():
@@ -22,8 +18,8 @@ def main():
                         help='Start recording immediately')
     parser.add_argument('--output', type=str, default='recordings',
                         help='Directory to save recordings (default: recordings)')
-    parser.add_argument('--freq', type=int, default=20,
-                        help='Recording frequency in Hz (default: 20)')
+    parser.add_argument('--freq', type=int, default=10,
+                        help='Recording frequency in Hz (default: 10)')
     parser.add_argument('--window', type=int, nargs=2, default=(800, 600),
                         help='Window size as width height (default: 800 600)')
     
