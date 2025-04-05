@@ -97,7 +97,7 @@ def run_simulation(model, data, joint_trajectories, joint_mapping, timestamps):
         
         # Set up camera position to show the full robot
         viewer.cam.distance = 3.0      # Distance from target - increase to zoom out
-        viewer.cam.azimuth = 90.0      # Camera rotation around z axis in degrees
+        viewer.cam.azimuth = 180.0      # Camera rotation around z axis in degrees
         viewer.cam.elevation = -20.0   # Camera elevation in degrees
         viewer.cam.lookat[0] = 0.0     # Target x position
         viewer.cam.lookat[1] = 0.0     # Target y position
@@ -109,57 +109,63 @@ def run_simulation(model, data, joint_trajectories, joint_mapping, timestamps):
         # Wait for the viewer to initialize
         time.sleep(1.0)
         
-        start_time = time.time()
+        # Use a fixed frame rate instead of trying to match real-time exactly
+        target_fps = 30  # Target frames per second
+        frame_time = 1.0 / target_fps
+        
         current_frame = 0
         total_frames = len(timestamps)
         
         print(f"Starting simulation with {total_frames} frames of motion data...")
+        print(f"Running at {target_fps} FPS")
         print(f"Camera settings: distance={viewer.cam.distance}, azimuth={viewer.cam.azimuth}, elevation={viewer.cam.elevation}")
-        print(f"Camera lookat: [{viewer.cam.lookat[0]}, {viewer.cam.lookat[1]}, {viewer.cam.lookat[2]}]")
         
         # Simple instructions for adjusting view manually
         print("\nYou can adjust the camera view manually in the MuJoCo viewer:")
         print("  - Hold right mouse button and move to rotate")
         print("  - Scroll to zoom in/out")
         print("  - Hold middle mouse button and move to pan")
+        print("  - Press ESC to exit")
+        
+        last_frame_time = time.time()
         
         while current_frame < total_frames and viewer.is_running():
-            # Get the current time in the simulation
-            current_time = time.time() - start_time
+            # Calculate elapsed time since last frame
+            current_time = time.time()
+            elapsed = current_time - last_frame_time
             
-            # Find the closest frame based on timestamp
-            while current_frame < total_frames - 1 and timestamps[current_frame + 1] < current_time:
+            # If it's time to show the next frame
+            if elapsed >= frame_time:
+                # Update time tracker
+                last_frame_time = current_time
+                
+                # Print progress occasionally
+                if current_frame % 30 == 0:
+                    print(f"Processing frame {current_frame}/{total_frames} ({current_frame / total_frames * 100:.1f}%)")
+                
+                # Set joint angles in MuJoCo
+                for joint_name, joint_id in joint_mapping.items():
+                    if joint_name in joint_trajectories:
+                        angle = joint_trajectories[joint_name][current_frame]
+                        joint_adr = model.jnt_qposadr[joint_id]
+                        data.qpos[joint_adr] = angle
+                
+                # Step the simulation
+                mujoco.mj_forward(model, data)
+                
+                # Update the viewer
+                viewer.sync()
+                
+                # Move to next frame
                 current_frame += 1
-            
-            # Print joint angles occasionally for debugging
-            if current_frame % 30 == 0:
-                print(f"\nFrame {current_frame} joint angles:")
-                for joint, angles in joint_trajectories.items():
-                    if joint in joint_mapping:
-                        print(f"  {joint}: {angles[current_frame]:.4f} rad ({math.degrees(angles[current_frame]):.1f}°)")
-            
-            # Set joint angles in MuJoCo
-            for joint_name, joint_id in joint_mapping.items():
-                if joint_name in joint_trajectories:
-                    angle = joint_trajectories[joint_name][current_frame]
-                    joint_adr = model.jnt_qposadr[joint_id]
-                    data.qpos[joint_adr] = angle
-            
-            # Step the simulation
-            mujoco.mj_forward(model, data)
-            
-            # Update the viewer
-            viewer.sync()
-            
-            # Control simulation speed (real-time)
-            time_to_wait = timestamps[current_frame] - current_time
-            if time_to_wait > 0:
-                time.sleep(time_to_wait)
-            elif time_to_wait < -0.1:  # If we're running behind by more than 100ms
-                print(f"Warning: Playback falling behind real-time by {-time_to_wait:.3f}s")
+            else:
+                # Small sleep to prevent high CPU usage
+                time.sleep(0.001)
         
         print("Simulation complete.")
-        # Keep the viewer open
+        
+        # Keep the viewer open until the user exits
+        print("Playback finished. Viewer will remain open until closed.")
         while viewer.is_running():
             viewer.sync()
             time.sleep(0.1)
@@ -167,7 +173,7 @@ def run_simulation(model, data, joint_trajectories, joint_mapping, timestamps):
 def main():
     # File paths
     xml_path = "unitree_g1/g1.xml"  # Unitree G1 model
-    csv_path = "test_right_shoulder_pitch_pos.csv"  # Your recorded motion data
+    csv_path = "test.csv"  # Your recorded motion data
     
     # Check if files exist
     if not os.path.exists(xml_path):

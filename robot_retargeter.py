@@ -142,29 +142,33 @@ class RobotRetargeter:
         print("Recording stopped")
         
     def record_frame(self):
-        """Record current joint angles to CSV if it's time for a new frame."""
+        """Records current joint angles to CSV in MuJoCo-compatible format."""
         if not self.is_recording:
             return
             
         current_time = time.time()
         # Check if it's time to record based on desired frequency
         if current_time - self.last_record_time >= self.record_interval:
-            # Calculate timestamp using fixed increments matching the expected frequency
-            # For 10Hz, this gives timestamps of 0, 0.1, 0.2, 0.3, etc.
-            timestamp = self.frame_counter * 0.1  # Hardcoded 0.1s interval (10Hz)
+            # Calculate timestamp
+            timestamp = self.frame_counter * (1.0 / self.recording_freq)
+            
+            # Get angles in MuJoCo convention
+            mujoco_angles = self.convert_to_mujoco_precise(self.joint_angles)
             
             # Create row with timestamp
             row = [f"{timestamp:.1f}"]
             
-            # Add all joint angles to the row (scalar values)
+            # Add all joint angles to the row
             for joint in [
-                "left_shoulder_pitch_joint", "left_shoulder_yaw_joint", "left_shoulder_roll_joint",
-                "left_elbow_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", "left_wrist_roll_joint",
-                "right_shoulder_pitch_joint", "right_shoulder_yaw_joint", "right_shoulder_roll_joint",
-                "right_elbow_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint", "right_wrist_roll_joint"
+                     'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 
+                     'left_elbow_joint', 
+                     'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
+                     'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 
+                     'right_elbow_joint', 
+                     'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint'
             ]:
                 # Format the angle in radians to 4 decimal places
-                angle = self.joint_angles.get(joint, 0.0)
+                angle = mujoco_angles.get(joint, 0.0)
                 row.append(f"{angle:.4f}")
                 
             # Write to CSV
@@ -388,8 +392,12 @@ class RobotRetargeter:
         # Roll (rotation in X-Y plane)
         r_wrist_roll = math.atan2(r_forearm[0], r_forearm[1])
 
-        l_shoulder_pitch -= math.pi/2
-        r_shoulder_pitch -= math.pi/2
+        # # Apply MuJoCo-specific conversions
+        # l_shoulder_roll = -l_shoulder_roll + 0.19
+        # r_shoulder_roll = -r_shoulder_roll - 0.19
+        
+        # l_elbow_angle = l_elbow_angle + 1.57
+        # r_elbow_angle = r_elbow_angle + 1.57
         
         # Apply joint limits before updating angles
         l_shoulder_pitch = self.apply_limit(l_shoulder_pitch, "shoulder_pitch")
@@ -564,53 +572,68 @@ class RobotRetargeter:
         vector_left_lower = self.robot_joints["left_wrist"] - self.robot_joints["left_elbow"]
         self.robot_joints["left_wrist"] = self.robot_joints["left_elbow"] + vector_left_lower * scale_lower_left
 
-    def apply_joint_limits(self):
-        """Apply joint limits to ensure realistic robot motion."""
-        # This will constrain joint angles to keep them within the robot's physical limits
-        # We'll implement this based on the joint_angles dictionary and joint_limits
+    def convert_to_mujoco_precise(self, angles):
+        """
+        Convert joint angles from the retargeter convention to MuJoCo convention
+        using precise mapping based on known reference values.
         
-        # Calculate joint angles first if they haven't been calculated already
-        # (they should be calculated in retarget_pose, but just in case)
-        self.calculate_joint_angles()
+        Parameters:
+        -----------
+        angles : dict
+            Dictionary of joint names to angle values
+            
+        Returns:
+        --------
+        dict
+            Dictionary of joint names to MuJoCo-compatible angle values
+        """
+        mujoco_angles = {}
         
-        # Now apply limits to joint angles
-        for joint_name, angle in self.joint_angles.items():
-            # Extract the joint type from the name (e.g., "shoulder_pitch" from "left_shoulder_pitch_joint")
-            parts = joint_name.split('_')
-            if len(parts) >= 3:
-                joint_type = parts[1] + "_" + parts[2]
-                
-                # Apply limits if defined
-                if joint_type in self.joint_limits:
-                    min_limit, max_limit = self.joint_limits[joint_type]
-                    self.joint_angles[joint_name] = max(min_limit, min(max_limit, angle))
+        # Left arm conversion based on exact known mappings
+        # From recorded: -3.05 → MuJoCo: 0.00
+        mujoco_angles["left_shoulder_pitch_joint"] = angles["left_shoulder_pitch_joint"] + 3.05
         
-        # Note: A complete implementation would update joint positions from the constrained angles
-        # using forward kinematics. For now, we'll use the already calculated positions.
-
-    def apply_joint_limits(self):
-        """Apply joint limits to ensure realistic robot motion."""
-        # This will constrain joint angles to keep them within the robot's physical limits
-        # We'll implement this based on the joint_angles dictionary and joint_limits
+        # From recorded: -1.58 → MuJoCo: 0.19
+        mujoco_angles["left_shoulder_roll_joint"] = angles["left_shoulder_roll_joint"] + 1.77
         
-        # Calculate joint angles first if they haven't been calculated already
-        # (they should be calculated in retarget_pose, but just in case)
-        self.calculate_joint_angles()
+        # From recorded: -2.61 → MuJoCo: 0.00
+        mujoco_angles["left_shoulder_yaw_joint"] = angles["left_shoulder_yaw_joint"] + 2.61
         
-        # Now apply limits to joint angles
-        for joint_name, angle in self.joint_angles.items():
-            # Extract the joint type from the name (e.g., "shoulder_pitch" from "left_shoulder_pitch_joint")
-            parts = joint_name.split('_')
-            if len(parts) >= 3:
-                joint_type = parts[1] + "_" + parts[2]
-                
-                # Apply limits if defined
-                if joint_type in self.joint_limits:
-                    min_limit, max_limit = self.joint_limits[joint_type]
-                    self.joint_angles[joint_name] = max(min_limit, min(max_limit, angle))
+        # From recorded: 0.18 → MuJoCo: 1.57
+        mujoco_angles["left_elbow_joint"] = angles["left_elbow_joint"] + 1.39
         
-        # Note: A complete implementation would update joint positions from the constrained angles
-        # using forward kinematics. For now, we'll use the already calculated positions.
+        # From recorded: -1.61 → MuJoCo: 0.00
+        mujoco_angles["left_wrist_pitch_joint"] = angles["left_wrist_pitch_joint"] + 1.61
+        
+        # From recorded: -1.97 → MuJoCo: 0.00
+        mujoco_angles["left_wrist_roll_joint"] = angles["left_wrist_roll_joint"] + 1.97
+        
+        # From recorded: -1.61 → MuJoCo: 0.00
+        mujoco_angles["left_wrist_yaw_joint"] = angles["left_wrist_yaw_joint"] + 1.61
+        
+        # Right arm conversion based on exact known mappings
+        # From recorded: 2.67 → MuJoCo: 0.00
+        mujoco_angles["right_shoulder_pitch_joint"] = -angles["right_shoulder_pitch_joint"] + 2.67
+        
+        # From recorded: 0.35 → MuJoCo: -0.19
+        mujoco_angles["right_shoulder_roll_joint"] = -angles["right_shoulder_roll_joint"] + 0.16
+        
+        # From recorded: 2.61 → MuJoCo: 0.00
+        mujoco_angles["right_shoulder_yaw_joint"] = -angles["right_shoulder_yaw_joint"] + 2.61
+        
+        # From recorded: 0.18 → MuJoCo: 1.57
+        mujoco_angles["right_elbow_joint"] = angles["right_elbow_joint"] + 1.39
+        
+        # From recorded: 1.61 → MuJoCo: 0.00
+        mujoco_angles["right_wrist_pitch_joint"] = -angles["right_wrist_pitch_joint"] + 1.61
+        
+        # From recorded: 1.12 → MuJoCo: 0.00
+        mujoco_angles["right_wrist_roll_joint"] = -angles["right_wrist_roll_joint"] + 1.12
+        
+        # From recorded: 1.61 → MuJoCo: 0.00
+        mujoco_angles["right_wrist_yaw_joint"] = -angles["right_wrist_yaw_joint"] + 1.61
+        
+        return mujoco_angles
 
     def update_robot_plot(self):
         """
