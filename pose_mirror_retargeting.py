@@ -4,9 +4,12 @@ import pygame
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+import time
 
-class PoseMirror3D:
-    def __init__(self, window_size=(640, 480)):
+from robot_retargeter import RobotRetargeter
+
+class PoseMirror3DWithRetargeting:
+    def __init__(self, window_size=(1280, 720)):
         self.mp_pose = mp.solutions.pose
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_drawing_styles = mp.solutions.drawing_styles
@@ -21,7 +24,7 @@ class PoseMirror3D:
         pygame.init()
         self.window_size = window_size
         self.screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("3D Pose Mirror - Body Plane Stabilized")
+        pygame.display.set_caption("3D Pose Mirror - With Robot Retargeting")
         
         # Initialize matplotlib for 3D visualization
         plt.ion()  # Enable interactive mode
@@ -30,13 +33,18 @@ class PoseMirror3D:
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         
         # Set initial view angle for forward-facing
-        self.ax.view_init(elev=0, azim=90)
+        # Changed to match figure orientation
+        self.ax.view_init(elev=0, azim=0)
+        
+        # Initialize the robot retargeter
+        self.robot_retargeter = RobotRetargeter(recording_freq=20)  # 20Hz recording
         
         # Style parameters
         self.WHITE = (255, 255, 255)
         self.BLACK = (0, 0, 0)
         self.RED = (255, 0, 0)
         self.BLUE = (0, 0, 255)
+        self.GREEN = (0, 255, 0)
         
         # Drawing styles
         self.landmark_style = self.mp_drawing.DrawingSpec(
@@ -50,6 +58,7 @@ class PoseMirror3D:
         )
         
         self.font = pygame.font.Font(None, 36)
+        self.small_font = pygame.font.Font(None, 24)
         self.scale = 200
         
         # Store the current rotation angle with a sensible default
@@ -65,7 +74,10 @@ class PoseMirror3D:
         self.max_history = 5  # Number of frames to keep in history
         
     def calculate_body_plane_angle(self, landmarks):
-        """Calculate the angle between the body plane and camera plane using chest orientation"""
+        """
+        Calculate the angle between the body plane and camera plane using chest orientation.
+        Updated for correct MediaPipe coordinate system.
+        """
         if not landmarks:
             return 0
         
@@ -81,9 +93,14 @@ class PoseMirror3D:
         chest_mid_y = (left_shoulder.y + right_shoulder.y) / 2
         chest_mid_z = (left_shoulder.z + right_shoulder.z) / 2
         
-        # Calculate a vector pointing from the chest outward (normal to the chest plane)
-        chest_to_nose_x = nose.x - chest_mid_x
-        chest_to_nose_z = nose.z - chest_mid_z
+        # Based on the debug output and coordinate mapping:
+        # X needs to be flipped, Y is mapped to Z, Z is mapped to Y
+        # So chest-to-nose vector in our target coordinates would be:
+        # [-(nose.x - chest_mid_x), -(nose.z - chest_mid_z), -(nose.y - chest_mid_y)]
+        
+        # But for angle calculation, we only need the horizontal plane (X and Z in our mapping)
+        chest_to_nose_x = -(nose.x - chest_mid_x)  # Flipped X
+        chest_to_nose_z = -(nose.y - chest_mid_y)  # Y mapped to Z
         
         # Normalize this vector
         magnitude = math.sqrt(chest_to_nose_x**2 + chest_to_nose_z**2)
@@ -100,7 +117,8 @@ class PoseMirror3D:
         avg_x = sum(v[0] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
         avg_z = sum(v[1] for v in self.recent_chest_vectors) / len(self.recent_chest_vectors)
         
-        # Calculate the angle between this chest normal vector and the camera's z-axis
+        # Calculate the angle between chest normal vector and the Z-axis
+        # For our mapped coordinates, forward is positive Z
         raw_angle = math.degrees(math.atan2(avg_x, avg_z))
         
         # Set an initial reference angle if not set
@@ -112,15 +130,18 @@ class PoseMirror3D:
             
         # Calculate relative angle from initial position
         relative_angle = raw_angle - self.angle_offset
-        
-        # Normalize the angle to stay within -180 to 180 degrees
-        # This prevents the 300+ degree jumps
+
+        # Ignore small angles (create a dead zone)
+        if abs(relative_angle) < 10:  # 5 degrees dead zone
+            relative_angle = 0
+                
+        # Normalize angle to stay within -180 to 180 degrees
         while relative_angle > 180:
             relative_angle -= 360
         while relative_angle < -180:
             relative_angle += 360
         
-        # Apply smoothing to prevent jittering (weighted moving average)
+        # Apply smoothing (weighted moving average)
         self.current_rotation_angle = self.current_rotation_angle * self.smoothing_factor + relative_angle * (1 - self.smoothing_factor)
         
         # Apply another normalization after smoothing
@@ -130,61 +151,88 @@ class PoseMirror3D:
             self.current_rotation_angle += 360
             
         return self.current_rotation_angle
+    
+    def print_pose_info(self, results):
+        """
+        Print information about MediaPipe pose world landmarks to understand coordinate system.
+        Add this to the PoseMirror3DWithRetargeting class for debugging.
+        """
+        if not results.pose_world_landmarks:
+            return
+            
+        # Get some key landmarks
+        landmarks = results.pose_world_landmarks.landmark
+        nose = landmarks[self.mp_pose.PoseLandmark.NOSE.value]
+        left_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        right_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        
+        print("\n--- MediaPipe World Landmarks Raw Data ---")
+        print(f"Nose: x={nose.x:.4f}, y={nose.y:.4f}, z={nose.z:.4f}")
+        print(f"Left Shoulder: x={left_shoulder.x:.4f}, y={left_shoulder.y:.4f}, z={left_shoulder.z:.4f}")
+        print(f"Right Shoulder: x={right_shoulder.x:.4f}, y={right_shoulder.y:.4f}, z={right_shoulder.z:.4f}")
+        
+        # Calculate shoulder width vector (left to right)
+        shoulder_vector = [
+            right_shoulder.x - left_shoulder.x,
+            right_shoulder.y - left_shoulder.y,
+            right_shoulder.z - left_shoulder.z
+        ]
+        print(f"Shoulder vector (left to right): [{shoulder_vector[0]:.4f}, {shoulder_vector[1]:.4f}, {shoulder_vector[2]:.4f}]")
+        
+        # Chest to nose vector (approximating forward direction)
+        chest_mid_x = (left_shoulder.x + right_shoulder.x) / 2
+        chest_mid_y = (left_shoulder.y + right_shoulder.y) / 2
+        chest_mid_z = (left_shoulder.z + right_shoulder.z) / 2
+        
+        forward_vector = [
+            nose.x - chest_mid_x,
+            nose.y - chest_mid_y,
+            nose.z - chest_mid_z
+        ]
+        print(f"Forward vector (chest to nose): [{forward_vector[0]:.4f}, {forward_vector[1]:.4f}, {forward_vector[2]:.4f}]")
         
     def update_3d_plot(self, results):
-        """Update the 3D matplotlib visualization with rotation compensation"""
+        """
+        Visualization with correct mapping based on debug output.
+        MediaPipe world landmark coordinates:
+        - x: positive is left (needs to be flipped)
+        - y: negative is upward/inward
+        - z: negative is forward/upward
+        
+        Mapping to standard view:
+        - X: positive right (flip MediaPipe's x)
+        - Y: positive up (using MediaPipe's z, negated)
+        - Z: positive forward (using MediaPipe's y, negated)
+        """
         self.ax.clear()
         
         # Set up the 3D axes
-        self.ax.set_xlabel('Z')
-        self.ax.set_ylabel('X')
-        self.ax.set_zlabel('Y')
+        self.ax.set_xlabel('X (Left-Right)')
+        self.ax.set_ylabel('Z (Forward-Back)')
+        self.ax.set_zlabel('Y (Up-Down)')
         
-        # Set fixed axes limits for consistent visualization
+        # Set fixed limits
         self.ax.set_xlim3d(-1, 1)
         self.ax.set_ylim3d(-1, 1)
         self.ax.set_zlim3d(-1, 1)
         
-        # Draw the coordinate grid
+        # Draw grid
         self.ax.grid(True)
         
         if results.pose_world_landmarks:
-            # Calculate body rotation angle
-            rotation_angle = self.calculate_body_plane_angle(results.pose_world_landmarks.landmark)
-            
-            # Extract landmark coordinates 
+            # Extract landmarks 
             landmarks = results.pose_world_landmarks.landmark
             
-            # Apply rotation to compensate for body turning
-            # Convert angle to radians for numpy functions
-            angle_rad = math.radians(rotation_angle)
-            rotation_matrix = np.array([
-                [math.cos(angle_rad), -math.sin(angle_rad)],
-                [math.sin(angle_rad), math.cos(angle_rad)]
-            ])
+            # Map coordinates to standard view
+            x = []  # Right is positive
+            y = []  # Up is positive
+            z = []  # Forward is positive
             
-            # Extract, transform, and remap coordinates
-            transformed_points = []
             for landmark in landmarks:
-                # Get original coordinates
-                orig_x = -landmark.z  # Convert MediaPipe's z-forward to our x-forward
-                orig_y = landmark.x   # MediaPipe's x to our y
-                
-                # Apply rotation matrix to x and y coordinates
-                # This counteracts the person's rotation
-                point = np.array([orig_x, orig_y])
-                rotated = np.dot(rotation_matrix, point)
-                
-                transformed_points.append({
-                    'x': rotated[0],
-                    'y': rotated[1],
-                    'z': -landmark.y  # Convert MediaPipe's y to our z (up)
-                })
-            
-            # Extract coordinates for plotting
-            x = [point['x'] for point in transformed_points]
-            y = [point['y'] for point in transformed_points]
-            z = [point['z'] for point in transformed_points]
+                # Apply the mapping based on the debug output
+                x.append(-landmark.x)    # Flip x to make right positive
+                y.append(-landmark.z)    # Use -z for up
+                z.append(-landmark.y)    # Use -y for forward
             
             # Plot landmarks
             self.ax.scatter(x, y, z, c='r', marker='o')
@@ -193,13 +241,19 @@ class PoseMirror3D:
             for connection in self.mp_pose.POSE_CONNECTIONS:
                 start_idx = connection[0]
                 end_idx = connection[1]
-                if start_idx < len(x) and end_idx < len(x):  # Check bounds
+                if start_idx < len(x) and end_idx < len(x):
                     self.ax.plot([x[start_idx], x[end_idx]],
-                               [y[start_idx], y[end_idx]],
-                               [z[start_idx], z[end_idx]], 'b-')
+                            [y[start_idx], y[end_idx]],
+                            [z[start_idx], z[end_idx]], 'b-')
         
-        # Maintain view angle
-        self.ax.view_init(elev=0, azim=0)
+        # View from the front
+        self.ax.view_init(elev=15, azim=270)
+        
+        # Add coordinate axis markers
+        # origin = [0, 0, 0]
+        # self.ax.quiver(*origin, 0.2, 0, 0, color='r', label='X')
+        # self.ax.quiver(*origin, 0, 0.2, 0, color='g', label='Y')
+        # self.ax.quiver(*origin, 0, 0, 0.2, color='b', label='Z')
         
         # Update the plot
         self.fig.canvas.draw()
@@ -220,7 +274,15 @@ class PoseMirror3D:
             
             rotation_angle = 0
             if results.pose_world_landmarks:
+                #self.print_pose_info(results)
                 rotation_angle = self.calculate_body_plane_angle(results.pose_world_landmarks.landmark)
+                
+                # Retarget to robot model
+                self.robot_retargeter.retarget_pose(results.pose_world_landmarks, rotation_angle)
+                self.robot_retargeter.update_robot_plot()
+                
+                # Record if we're recording
+                self.robot_retargeter.record_frame()
             
             # Update main pygame window
             if results.pose_landmarks:
@@ -255,6 +317,26 @@ class PoseMirror3D:
                 )
                 self.screen.blit(calibration_text, (10, 90))
                 
+                # Render recording status
+                recording_text = self.font.render(
+                    f"Recording @ {self.robot_retargeter.recording_freq}Hz" if self.robot_retargeter.is_recording else "Not Recording", 
+                    True, 
+                    self.RED if self.robot_retargeter.is_recording else self.WHITE
+                )
+                self.screen.blit(recording_text, (10, 130))
+                
+                # Draw keyboard commands
+                key_commands = [
+                    "R - Reset calibration",
+                    "S - Start/stop recording",
+                    "Q - Quit",
+                    "Arrow keys - Rotate view"
+                ]
+                
+                for i, cmd in enumerate(key_commands):
+                    cmd_text = self.small_font.render(cmd, True, self.WHITE)
+                    self.screen.blit(cmd_text, (10, self.window_size[1] - 110 + i*25))
+                
                 # Draw chest direction vector on screen for debugging
                 if self.recent_chest_vectors:
                     center_x, center_y = self.window_size[0] - 100, 100
@@ -283,6 +365,14 @@ class PoseMirror3D:
                         self.initial_angle_set = False
                         self.current_rotation_angle = 0
                         self.recent_chest_vectors = []
+                    elif event.key == pygame.K_s:
+                        # Toggle recording
+                        if self.robot_retargeter.is_recording:
+                            self.robot_retargeter.stop_recording()
+                        else:
+                            # Generate filename with timestamp
+                            timestamp = time.strftime("%Y%m%d-%H%M%S")
+                            self.robot_retargeter.start_recording(f"robot_motion_{timestamp}.csv")
                     elif event.key == pygame.K_q:
                         running = False
                     # View control keys
@@ -302,11 +392,11 @@ class PoseMirror3D:
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
                 
+        # Make sure to stop recording if we're quitting
+        if self.robot_retargeter.is_recording:
+            self.robot_retargeter.stop_recording()
+            
         cap.release()
         cv2.destroyAllWindows()
         pygame.quit()
         plt.close()
-
-if __name__ == "__main__":
-    mirror = PoseMirror3D()
-    mirror.run()
