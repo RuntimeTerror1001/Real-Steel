@@ -4,36 +4,22 @@ import numpy as np
 import math
 import csv
 import time
-from Arm_Kinematics import ArmKinematics
+from ik_analytical3d import IKAnalytical3D
 import xml.etree.ElementTree as ET
 
 class RobotRetargeter:
     """Class to handle retargeting human motion to robot figure and recording data."""
-    def __init__(self, robot_type="unitree_g1", recording_freq=10, smoothing_window=15, smoothing_factor=0.85):
-        # Initialize matplotlib for 3D visualization of robot figure
-        self.fig_robot = plt.figure(figsize=(6, 6))
-        self.ax_robot = self.fig_robot.add_subplot(111, projection='3d')
-        plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
-        
-        # Set initial view angle - fixed to match human orientation
-        self.ax_robot.view_init(elev=0, azim=0)
-        
+    def __init__(self, robot_type="unitree_g1", recording_freq=10):
+        """Initialize the RobotRetargeter."""
         # Robot specifications - Unitree G1 humanoid model
         self.robot_type = robot_type
 
-        # Arm kinematics module
-        self.kinematics_solver = ArmKinematics()
-        
-        # Extract Joint Limits from XML file
-        xml_path = "unitree_g1/g1.xml"
-        self.joint_limits = self.load_joint_limits_from_xml(xml_path)
-
-        # Updated robot dimensions (in meters)
+        # Robot dimensions (in meters)
         self.dimensions = {
             "shoulder_width": 0.200,
-            "upper_arm_length": 0.082,
-            "lower_arm_length": 0.185,
-            "torso_height": 0.4,  # Use measured value if available
+            "upper_arm_length": 0.300,
+            "lower_arm_length": 0.300,
+            "torso_height": 0.4,
         }
         
         # Current robot joint positions (3D coordinates)
@@ -65,34 +51,43 @@ class RobotRetargeter:
             "right_wrist_roll_joint": 0.0,
         }
         
-        # Enhanced: Joint angle history and smoothing
-        self.joint_angle_history = {joint: [] for joint in self.joint_angles.keys()}
-        self.smoothing_window = smoothing_window
-        self.smoothing_factor = smoothing_factor
-        
-        # Enhanced: Velocity limiting to prevent sudden changes
-        self.previous_joint_angles = self.joint_angles.copy()
-        self.max_velocity = 0.1  # Maximum change in angle per frame (radians)
-        
-        # Enhanced: Joint-specific smoothing factors
-        self.joint_type_smoothing = {
-            "shoulder": 0.9,    # More smoothing for shoulders
-            "elbow": 0.85,      # Medium smoothing for elbows
-            "wrist": 0.8        # Less smoothing for wrists (more responsive)
-        }
-        
-        # Enhanced: Outlier rejection threshold (in radians)
-        self.outlier_threshold = 0.5  # ~30 degrees
-        
         # Recording settings
         self.is_recording = False
-        self.recording_freq = recording_freq  # Target frequency in Hz
+        self.recording_freq = recording_freq
         self.csv_file = None
         self.csv_writer = None
         self.last_record_time = 0
         self.record_interval = 1.0 / recording_freq
         self.frame_counter = 0
         
+        # Last valid angles for error recovery
+        self.last_valid_angles = self.joint_angles.copy()
+        
+        # Arm kinematics module - analytical solver
+        self.analytical_solver = IKAnalytical3D(
+            upper_arm_length=self.dimensions["upper_arm_length"],
+            lower_arm_length=self.dimensions["lower_arm_length"]
+        )
+        
+        # Extract Joint Limits from XML file
+        xml_path = "unitree_g1/g1.xml"
+        self.joint_limits = self.load_joint_limits_from_xml(xml_path)
+        
+        # Reference to the visualization axis
+        self.ax_robot = None
+
+        # Visualization joint positions (for plotting)
+        self.left_shoulder_pos = None
+        self.left_elbow_pos = None
+        self.left_wrist_pos = None
+        self.right_shoulder_pos = None
+        self.right_elbow_pos = None
+        self.right_wrist_pos = None
+
+        # MediaPipe setup
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_pose = mp.solutions.pose
+
     def start_recording(self, filename="robot_motion.csv"):
         """Start recording joint angles to CSV file."""
         if self.is_recording:
@@ -117,7 +112,7 @@ class RobotRetargeter:
         self.last_record_time = self.start_time
         self.frame_counter = 0
         print(f"Recording started to {filename} at {self.recording_freq}Hz")
-        
+
     def stop_recording(self):
         """Stop recording and close the CSV file."""
         if not self.is_recording:
@@ -128,29 +123,39 @@ class RobotRetargeter:
             self.csv_file = None
             self.csv_writer = None
         print("Recording stopped")
-        
+
     def record_frame(self):
         """Record current joint angles to CSV in MuJoCo-compatible format."""
         if not self.is_recording:
             return
+            
         current_time = time.time()
         if current_time - self.last_record_time >= self.record_interval:
             timestamp = self.frame_counter * (1.0 / self.recording_freq)
             mujoco_angles = self.convert_to_mujoco_precise(self.joint_angles, apply_offset=True)
-            row = [f"{timestamp:.1f}"]
+            
+            # Create row with timestamp and joint angles
+            row = [f"{timestamp:.3f}"]
             for joint in [
-                     'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 
-                     'left_elbow_joint', 
-                     'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
-                     'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 
-                     'right_elbow_joint', 
-                     'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint'
+                'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 
+                'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
+                'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 
+                'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint'
             ]:
                 angle = mujoco_angles.get(joint, 0.0)
-                row.append(f"{angle:.4f}")
+                if np.isnan(angle):
+                    angle = 0.0  # Replace NaN with 0.0
+                row.append(f"{angle:.6f}")
+            
+            # Write row and flush to ensure data is saved
             self.csv_writer.writerow(row)
+            self.csv_file.flush()
+            
             self.last_record_time = current_time
             self.frame_counter += 1
+            
+            if self.frame_counter % 30 == 0:
+                print(f"Recorded frame {self.frame_counter} at {timestamp:.2f}s")
     
     def calculate_joint_positions(self):
         """Calculate 3D positions for all robot joints based on current skeleton."""
@@ -179,170 +184,171 @@ class RobotRetargeter:
         return positions
 
     def retarget_pose(self, human_landmarks, rotation_angle=0):
-        print("[INFO] Retargeting new frame")
+        """Retarget human pose to robot."""
         if not human_landmarks:
-            print("[WARN] No human landmarks detected")
+            print("[ERROR] No human landmarks provided to retarget_pose.")
             return
-            
-        # Use the torso as the origin.
+
+        # Get landmarks
         landmarks = human_landmarks.landmark
         self.robot_joints["torso"] = np.array([0, 0, 0])
         scale = 0.3  # Scale factor to adjust for robot size
-        angle_rad = math.radians(rotation_angle)
-        rotation_matrix = np.array([
-            [math.cos(angle_rad), -math.sin(angle_rad)],
-            [math.sin(angle_rad), math.cos(angle_rad)]
-        ])
-        
-        # Process both sides: left and right.
         for side in ["left", "right"]:
             if side == "left":
-                shoulder = landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-                elbow = landmarks[mp.solutions.pose.PoseLandmark.LEFT_ELBOW.value]
-                wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST.value]
+                try:
+                    shoulder = landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
+                    elbow = landmarks[mp.solutions.pose.PoseLandmark.LEFT_ELBOW.value]
+                    wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST.value]
+                except Exception as e:
+                    print(f"[ERROR] Missing left arm landmarks: {e}")
+                    continue
             else:
-                shoulder = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-                elbow = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value]
-                wrist = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value]
-                
-            # Map shoulder coordinates from MediaPipe to standard coordinates:
-            # X: flip sign; Y: use -shoulder.z; Z: use -shoulder.y
-            standard_shoulder_x = -shoulder.x      
-            standard_shoulder_y = -shoulder.z      
-            standard_shoulder_z = -shoulder.y      
-            shoulder_xz = np.array([standard_shoulder_x, standard_shoulder_z])
-            if rotation_angle != 0:
-                rotated = np.dot(rotation_matrix, shoulder_xz)
-                standard_shoulder_x, standard_shoulder_z = rotated
+                try:
+                    shoulder = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
+                    elbow = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value]
+                    wrist = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value]
+                except Exception as e:
+                    print(f"[ERROR] Missing right arm landmarks: {e}")
+                    continue
+            sign = -1 if side == "left" else 1
             self.robot_joints[f"{side}_shoulder"] = np.array([
-                standard_shoulder_x * scale,
-                standard_shoulder_y * scale,
-                standard_shoulder_z * scale
+                sign * shoulder.x * scale,
+                -shoulder.z * scale,
+                -shoulder.y * scale
             ])
-            
-            # Map elbow coordinates
-            standard_elbow_x = -elbow.x
-            standard_elbow_y = -elbow.z
-            standard_elbow_z = -elbow.y
-            elbow_xz = np.array([standard_elbow_x, standard_elbow_z])
-            if rotation_angle != 0:
-                rotated = np.dot(rotation_matrix, elbow_xz)
-                standard_elbow_x, standard_elbow_z = rotated
             self.robot_joints[f"{side}_elbow"] = np.array([
-                standard_elbow_x * scale,
-                standard_elbow_y * scale,
-                standard_elbow_z * scale
+                sign * elbow.x * scale,
+                -elbow.z * scale,
+                -elbow.y * scale
             ])
-            
-            # Map wrist coordinates
-            standard_wrist_x = -wrist.x
-            standard_wrist_y = -wrist.z
-            standard_wrist_z = -wrist.y
-            wrist_xz = np.array([standard_wrist_x, standard_wrist_z])
-            if rotation_angle != 0:
-                rotated = np.dot(rotation_matrix, wrist_xz)
-                standard_wrist_x, standard_wrist_z = rotated
             self.robot_joints[f"{side}_wrist"] = np.array([
-                standard_wrist_x * scale,
-                standard_wrist_y * scale,
-                standard_wrist_z * scale
+                sign * wrist.x * scale,
+                -wrist.z * scale,
+                -wrist.y * scale
             ])
+        self.scale_to_robot_dimensions()
+        try:
+            left_angles = self.calculate_joint_angles("left")
+            right_angles = self.calculate_joint_angles("right")
+            # Merge both arms' angles into self.joint_angles (standardized names)
+            self.joint_angles.update({
+                "left_shoulder_pitch_joint": left_angles.get("left_shoulder_pitch_joint", 0.0),
+                "left_shoulder_roll_joint": left_angles.get("left_shoulder_roll_joint", 0.0),
+                "left_shoulder_yaw_joint": left_angles.get("left_shoulder_yaw_joint", 0.0),
+                "left_elbow_joint": left_angles.get("left_elbow_joint", 0.0),
+                "right_shoulder_pitch_joint": right_angles.get("right_shoulder_pitch_joint", 0.0),
+                "right_shoulder_roll_joint": right_angles.get("right_shoulder_roll_joint", 0.0),
+                "right_shoulder_yaw_joint": right_angles.get("right_shoulder_yaw_joint", 0.0),
+                "right_elbow_joint": right_angles.get("right_elbow_joint", 0.0),
+                # Add wrist joints if your IK returns them
+                "left_wrist_pitch_joint": left_angles.get("left_wrist_pitch_joint", 0.0),
+                "left_wrist_yaw_joint": left_angles.get("left_wrist_yaw_joint", 0.0),
+                "left_wrist_roll_joint": left_angles.get("left_wrist_roll_joint", 0.0),
+                "right_wrist_pitch_joint": right_angles.get("right_wrist_pitch_joint", 0.0),
+                "right_wrist_yaw_joint": right_angles.get("right_wrist_yaw_joint", 0.0),
+                "right_wrist_roll_joint": right_angles.get("right_wrist_roll_joint", 0.0),
+            })
+        except Exception as e:
+            print(f"[ERROR] IK calculation failed: {str(e)}")
+            self.joint_angles = self.last_valid_angles.copy()
+        self.update_visualization_positions()
+
+    def calculate_joint_angles(self, side="right"):
+        """Calculate joint angles for the specified arm using analytical IK."""
+        try:
+            shoulder = self.robot_joints[f"{side}_shoulder"]
+            elbow = self.robot_joints[f"{side}_elbow"]
+            wrist = self.robot_joints[f"{side}_wrist"]
+            angles = self.analytical_solver.solve(shoulder, elbow, wrist)
+            # Standardize output keys to *_joint
+            angles_3d = {
+                f"{side}_shoulder_pitch_joint": angles.get("shoulder_pitch", 0.0),
+                f"{side}_shoulder_roll_joint": angles.get("shoulder_roll", 0.0),
+                f"{side}_shoulder_yaw_joint": angles.get("shoulder_yaw", 0.0),
+                f"{side}_elbow_joint": angles.get("elbow", 0.0),
+                f"{side}_wrist_pitch_joint": angles.get("wrist_pitch", 0.0),
+                f"{side}_wrist_yaw_joint": angles.get("wrist_yaw", 0.0),
+                f"{side}_wrist_roll_joint": angles.get("wrist_roll", 0.0),
+            }
+            self.last_valid_angles.update(angles_3d)
+            return angles_3d
+        except Exception as e:
+            print(f"[ERROR] Error calculating joint angles for {side} arm: {e}")
+            return self.last_valid_angles.copy()
+
+    def apply_smooth_limit(self, angle, joint_type, side=None):
+        """Apply joint limits with smooth transitions."""
+        limits = self.joint_limits.get(joint_type)
+        if not limits:
+            return angle
             
-            # Ensure all joint positions are floats
-            for joint_name in self.robot_joints:
-                self.robot_joints[joint_name] = self.robot_joints[joint_name].astype(float)
-        
-        # After both sides have been processed, perform shoulder leveling.
-        shoulder_height_diff = self.robot_joints["left_shoulder"][1] - self.robot_joints["right_shoulder"][1]
-        self.robot_joints["left_shoulder"][1] -= shoulder_height_diff / 2
-        self.robot_joints["right_shoulder"][1] += shoulder_height_diff / 2
-        
-        # Adjust elbows and wrists to maintain proper arm structure after leveling.
-        left_elbow_offset = np.array([0, -shoulder_height_diff / 2, 0])
-        left_wrist_offset = np.array([0, -shoulder_height_diff / 2, 0])
-        self.robot_joints["left_elbow"] += left_elbow_offset
-        self.robot_joints["left_wrist"] += left_wrist_offset
-        
-        right_elbow_offset = np.array([0, shoulder_height_diff / 2, 0])
-        right_wrist_offset = np.array([0, shoulder_height_diff / 2, 0])
-        self.robot_joints["right_elbow"] += right_elbow_offset
-        self.robot_joints["right_wrist"] += right_wrist_offset
-        
-        # Finally, compute the robot joint angles from the updated positions.
-        self.calculate_joint_angles()
-        
-    def calculate_joint_angles(self):
-        # Compute right arm joint angles.
-        angles_3d_r = self.kinematics_solver.solve_3d_joint_angles(
-            self.robot_joints["right_shoulder"],
-            self.robot_joints["right_elbow"],
-            self.robot_joints["right_wrist"]
-        )
-        self.joint_angles["right_shoulder_pitch_joint"] = self.apply_limit(angles_3d_r["shoulder_pitch"], "shoulder_pitch")
-        self.joint_angles["right_shoulder_yaw_joint"] = self.apply_limit(angles_3d_r["shoulder_yaw"], "shoulder_yaw")
-        self.joint_angles["right_shoulder_roll_joint"] = self.apply_limit(angles_3d_r["shoulder_roll"], "shoulder_roll", "right")
-        self.joint_angles["right_elbow_joint"] = self.apply_limit(angles_3d_r["elbow"], "elbow")
-        self.joint_angles["right_wrist_pitch_joint"] = self.apply_limit(angles_3d_r["wrist_pitch"], "wrist_pitch")
-        self.joint_angles["right_wrist_yaw_joint"] = self.apply_limit(angles_3d_r["wrist_yaw"], "wrist_yaw")
-        self.joint_angles["right_wrist_roll_joint"] = self.apply_limit(angles_3d_r["wrist_roll"], "wrist_roll")
+        # Get appropriate limits
+        if isinstance(limits, dict) and side in limits:
+            min_limit, max_limit = limits[side]
+        elif isinstance(limits, tuple):
+            min_limit, max_limit = limits
+        else:
+            return angle
+            
+        # Calculate current velocity
+        current_velocity = 0
+        if len(self.transition_history[f"{side}_{joint_type}"]) > 0:
+            current_velocity = abs(angle - self.transition_history[f"{side}_{joint_type}"][-1])
+            
+        # Update transition history
+        self.transition_history[f"{side}_{joint_type}"].append(angle)
+        if len(self.transition_history[f"{side}_{joint_type}"]) > self.transition_window:
+            self.transition_history[f"{side}_{joint_type}"].pop(0)
+            
+        # Apply smooth transition if approaching limits
+        if angle < min_limit or angle > max_limit:
+            # Calculate transition factor based on velocity
+            transition_factor = min(1.0, current_velocity / self.motion_speed_threshold)
+            
+            # Smoothly transition to limit
+            if angle < min_limit:
+                return min_limit + (angle - min_limit) * transition_factor
+            else:
+                return max_limit + (angle - max_limit) * transition_factor
+                
+        return angle
 
-        # Compute left arm joint angles.
-        angles_3d_l = self.kinematics_solver.solve_3d_joint_angles(
-            self.robot_joints["left_shoulder"],
-            self.robot_joints["left_elbow"],
-            self.robot_joints["left_wrist"]
-        )
-        self.joint_angles["left_shoulder_pitch_joint"] = self.apply_limit(angles_3d_l["shoulder_pitch"], "shoulder_pitch")
-        self.joint_angles["left_shoulder_yaw_joint"] = self.apply_limit(angles_3d_l["shoulder_yaw"], "shoulder_yaw")
-        self.joint_angles["left_shoulder_roll_joint"] = self.apply_limit(angles_3d_l["shoulder_roll"], "shoulder_roll", "left")
-        self.joint_angles["left_elbow_joint"] = self.apply_limit(angles_3d_l["elbow"], "elbow")
-        self.joint_angles["left_wrist_pitch_joint"] = self.apply_limit(angles_3d_l["wrist_pitch"], "wrist_pitch")
-        self.joint_angles["left_wrist_yaw_joint"] = self.apply_limit(angles_3d_l["wrist_yaw"], "wrist_yaw")
-        self.joint_angles["left_wrist_roll_joint"] = self.apply_limit(angles_3d_l["wrist_roll"], "wrist_roll")
-
-        self.update_joint_history_with_outlier_detection(self.joint_angles)
-        self.apply_enhanced_smoothing(self.joint_angles)
-
-    def update_joint_history_with_outlier_detection(self, raw_angles):
+    def apply_adaptive_smoothing(self, raw_angles):
+        """Apply adaptive smoothing based on motion speed."""
         for joint, raw_angle in raw_angles.items():
-            is_outlier = False
+            # Calculate motion speed
             if len(self.joint_angle_history[joint]) > 0:
                 last_angle = self.joint_angle_history[joint][-1]
-                if abs(raw_angle - last_angle) > self.outlier_threshold:
-                    is_outlier = True
-            if not is_outlier:
+                motion_speed = abs(raw_angle - last_angle)
+                
+                # Determine smoothing factor based on motion speed
+                if motion_speed > self.motion_speed_threshold:
+                    smoothing_factor = self.fast_motion_factor
+                else:
+                    smoothing_factor = self.slow_motion_factor
+                    
+                # Apply joint-specific velocity limit
+                joint_type = joint.split('_')[1]  # Extract joint type (shoulder, elbow, wrist)
+                if joint_type in self.joint_velocity_limits:
+                    max_velocity = self.joint_velocity_limits[joint_type]
+                    if motion_speed > max_velocity:
+                        raw_angle = last_angle + max_velocity * np.sign(raw_angle - last_angle)
+                
+                # Apply smoothing
+                if len(self.joint_angle_history[joint]) >= self.smoothing_window:
+                    smoothed_value = np.mean(self.joint_angle_history[joint])
+                    self.joint_angles[joint] = (smoothed_value * smoothing_factor + 
+                                              raw_angle * (1 - smoothing_factor))
+                else:
+                    self.joint_angles[joint] = raw_angle
+                    
+                # Update history
                 self.joint_angle_history[joint].append(raw_angle)
                 if len(self.joint_angle_history[joint]) > self.smoothing_window:
                     self.joint_angle_history[joint].pop(0)
-
-    def apply_enhanced_smoothing(self, raw_angles):
-        for joint, raw_angle in raw_angles.items():
-            history = self.joint_angle_history[joint]
-            if len(history) < 3:
+            else:
                 self.joint_angles[joint] = raw_angle
-                continue
-                
-            smoothing_factor = self.smoothing_factor
-            for joint_type, factor in self.joint_type_smoothing.items():
-                if joint_type in joint:
-                    smoothing_factor = factor
-                    break
-                    
-            weights = [i+1 for i in range(len(history))]
-            total_weight = sum(weights)
-            weighted_sum = sum(h * w for h, w in zip(history, weights))
-            weighted_average = weighted_sum / total_weight
-            
-            current_value = self.joint_angles.get(joint, raw_angle)
-            smoothed_value = current_value * smoothing_factor + weighted_average * (1 - smoothing_factor)
-            
-            if joint in self.previous_joint_angles:
-                prev_value = self.previous_joint_angles[joint]
-                change = smoothed_value - prev_value
-                if abs(change) > self.max_velocity:
-                    smoothed_value = prev_value + self.max_velocity * np.sign(change)
-            
-            self.joint_angles[joint] = smoothed_value
+                self.joint_angle_history[joint].append(raw_angle)
         
         self.previous_joint_angles = self.joint_angles.copy()
 
@@ -364,8 +370,16 @@ class RobotRetargeter:
         for joint in root.findall(".//joint"):
             name = joint.get("name")
             limit = joint.find("limit")
-            if limit is not None and "range" in limit.attrib:
-                min_val, max_val = map(float, limit.get("range").split())
+            if limit is not None:
+                # Try both 'range' attribute and 'lower'/'upper'
+                if "range" in limit.attrib:
+                    min_val, max_val = map(float, limit.get("range").split())
+                else:
+                    min_val = float(limit.get("lower", "-3.14"))
+                    max_val = float(limit.get("upper", "3.14"))
+                joint_limits[name] = (min_val, max_val)
+            elif "range" in joint.attrib:
+                min_val, max_val = map(float, joint.get("range").split())
                 joint_limits[name] = (min_val, max_val)
         return joint_limits
 
@@ -401,179 +415,140 @@ class RobotRetargeter:
         self.robot_joints["left_wrist"] = self.robot_joints["left_elbow"] + vector_left_lower * scale_lower_left
 
     def convert_to_mujoco_precise(self, angles, apply_offset=True):
-     """
-     Convert joint angles from the retargeter convention to MuJoCo convention.
-     In this updated version, excessive fixed offsets have been removed.
-    
-     Parameters:
-      angles : dict
-          Dictionary of joint names to angle values.
-          apply_offset : bool
-          If True, apply calibration offsets (here set to zero or negligible values).
-    
-     Returns:
-      dict
-          Dictionary of joint names to MuJoCo-compatible angle values.
-    """
-     mujoco_angles = {}
-     if not apply_offset:
-         return angles.copy()
-    
-    # Instead of using large fixed offsets, we now either use zero offsets or calibrated ones.
-    # For now, we assume zero offsets. Adjust these values if you obtain calibration data.
-     offset_left_shoulder_pitch = 0.0
-     offset_left_shoulder_roll  = 0.0
-     offset_left_shoulder_yaw   = 0.0
-     offset_left_elbow          = 0.0
-     offset_left_wrist_pitch    = 0.0
-     offset_left_wrist_roll     = 0.0
-     offset_left_wrist_yaw      = 0.0
-
-     offset_right_shoulder_pitch = 0.0
-     offset_right_shoulder_roll  = 0.0
-     offset_right_shoulder_yaw   = 0.0
-     offset_right_elbow          = 0.0
-     offset_right_wrist_pitch    = 0.0
-     offset_right_wrist_roll     = 0.0
-     offset_right_wrist_yaw      = 0.0
-    
-    # Apply offsets as needed. Notice for right arm joints, the raw angle is negated.
-     mujoco_angles["left_shoulder_pitch_joint"] = angles["left_shoulder_pitch_joint"] + offset_left_shoulder_pitch
-     mujoco_angles["left_shoulder_roll_joint"]  = angles["left_shoulder_roll_joint"]  + offset_left_shoulder_roll
-     mujoco_angles["left_shoulder_yaw_joint"]   = angles["left_shoulder_yaw_joint"]   + offset_left_shoulder_yaw
-     mujoco_angles["left_elbow_joint"]          = angles["left_elbow_joint"]          + offset_left_elbow
-     mujoco_angles["left_wrist_pitch_joint"]    = angles["left_wrist_pitch_joint"]    + offset_left_wrist_pitch
-     mujoco_angles["left_wrist_roll_joint"]     = angles["left_wrist_roll_joint"]     + offset_left_wrist_roll
-     mujoco_angles["left_wrist_yaw_joint"]      = angles["left_wrist_yaw_joint"]      + offset_left_wrist_yaw
-
-     mujoco_angles["right_shoulder_pitch_joint"] = -angles["right_shoulder_pitch_joint"] + offset_right_shoulder_pitch
-     mujoco_angles["right_shoulder_roll_joint"]  = -angles["right_shoulder_roll_joint"]  + offset_right_shoulder_roll
-     mujoco_angles["right_shoulder_yaw_joint"]   = -angles["right_shoulder_yaw_joint"]   + offset_right_shoulder_yaw
-     mujoco_angles["right_elbow_joint"]          = angles["right_elbow_joint"]           + offset_right_elbow
-     mujoco_angles["right_wrist_pitch_joint"]    = -angles["right_wrist_pitch_joint"]    + offset_right_wrist_pitch
-     mujoco_angles["right_wrist_roll_joint"]     = -angles["right_wrist_roll_joint"]     + offset_right_wrist_roll
-     mujoco_angles["right_wrist_yaw_joint"]      = -angles["right_wrist_yaw_joint"]      + offset_right_wrist_yaw
-     
-     return mujoco_angles
-
-
-    def update_robot_plot(self):
-        self.ax_robot.clear()
-        self.ax_robot.set_xlabel('X (Right →)')
-        self.ax_robot.set_ylabel('Z (Forward ↗)')
-        self.ax_robot.set_zlabel('Y (Up ↑)')
-        limit = 0.4
-        self.ax_robot.set_xlim3d(-limit, limit)
-        self.ax_robot.set_ylim3d(-limit, limit)
-        self.ax_robot.set_zlim3d(-limit, limit)
-        self.ax_robot.grid(True)
+        """Convert joint angles from the retargeter convention to MuJoCo convention."""
+        mujoco_angles = {}
+        if not apply_offset:
+            return angles.copy()
         
-        shoulder_width = np.linalg.norm(self.robot_joints["right_shoulder"] - self.robot_joints["left_shoulder"])
-        torso_height = self.dimensions["torso_height"] * 0.8
-        shoulder_midpoint = (self.robot_joints["left_shoulder"] + self.robot_joints["right_shoulder"]) / 2
-        waist_midpoint = shoulder_midpoint - np.array([0, torso_height, 0])
-        waist_width = shoulder_width * 0.8
-        waist_left = waist_midpoint + np.array([waist_width/2, 0, 0])
-        waist_right = waist_midpoint - np.array([waist_width/2, 0, 0])
-        torso_points = [
-            self.robot_joints["left_shoulder"],
-            self.robot_joints["right_shoulder"],
-            waist_right,
-            waist_left,
-            self.robot_joints["left_shoulder"]
-        ]
-        torso_x = [point[0] for point in torso_points]
-        torso_y = [point[1] for point in torso_points]
-        torso_z = [point[2] for point in torso_points]
-        self.ax_robot.plot(torso_x, torso_y, torso_z, 'k-', linewidth=2)
+        # Apply simple mirroring for right arm joints
+        for joint, angle in angles.items():
+            if joint.startswith('right_'):
+                mujoco_angles[joint] = -angle
+            else:
+                mujoco_angles[joint] = angle
+                
+        return mujoco_angles
+
+    def update_robot_plot(self, ax=None):
+        """Update the robot visualization plot."""
+        if ax is None:
+            ax = self.ax_robot
+
+        # Clear previous plot
+        ax.clear()
+
+        # Plot robot skeleton
+        self.plot_robot_skeleton(ax)
+
+        # Set axis properties
+        ax.set_xlim([-0.8, 0.8])
+        ax.set_ylim([-0.8, 0.8])
+        ax.set_zlim([-0.2, 1.4])
+        ax.grid(True)
+        ax.set_xlabel('X')
+        ax.set_ylabel('Z')
+        ax.set_zlabel('Y')
+        ax.view_init(elev=0, azim=270)  # or azim=90, depending on your coordinate system
+
+    def plot_robot_skeleton(self, ax):
+        """Plot the robot skeleton using current joint positions."""
+        # Plot base
+        ax.scatter3D(0, 0, 0, c='r', marker='s')
+
+        # Plot left arm
+        if self.left_shoulder_pos is not None:
+            ax.scatter3D(self.left_shoulder_pos[0], self.left_shoulder_pos[2], self.left_shoulder_pos[1], c='b')
+            if self.left_elbow_pos is not None:
+                ax.plot3D([self.left_shoulder_pos[0], self.left_elbow_pos[0]],
+                         [self.left_shoulder_pos[2], self.left_elbow_pos[2]],
+                         [self.left_shoulder_pos[1], self.left_elbow_pos[1]], 'b-')
+                ax.scatter3D(self.left_elbow_pos[0], self.left_elbow_pos[2], self.left_elbow_pos[1], c='g')
+                if self.left_wrist_pos is not None:
+                    ax.plot3D([self.left_elbow_pos[0], self.left_wrist_pos[0]],
+                             [self.left_elbow_pos[2], self.left_wrist_pos[2]],
+                             [self.left_elbow_pos[1], self.left_wrist_pos[1]], 'g-')
+                    ax.scatter3D(self.left_wrist_pos[0], self.left_wrist_pos[2], self.left_wrist_pos[1], c='r')
+
+        # Plot right arm
+        if self.right_shoulder_pos is not None:
+            ax.scatter3D(self.right_shoulder_pos[0], self.right_shoulder_pos[2], self.right_shoulder_pos[1], c='b')
+            if self.right_elbow_pos is not None:
+                ax.plot3D([self.right_shoulder_pos[0], self.right_elbow_pos[0]],
+                         [self.right_shoulder_pos[2], self.right_elbow_pos[2]],
+                         [self.right_shoulder_pos[1], self.right_elbow_pos[1]], 'b-')
+                ax.scatter3D(self.right_elbow_pos[0], self.right_elbow_pos[2], self.right_elbow_pos[1], c='g')
+                if self.right_wrist_pos is not None:
+                    ax.plot3D([self.right_elbow_pos[0], self.right_wrist_pos[0]],
+                             [self.right_elbow_pos[2], self.right_wrist_pos[2]],
+                             [self.right_elbow_pos[1], self.right_wrist_pos[1]], 'g-')
+                    ax.scatter3D(self.right_wrist_pos[0], self.right_wrist_pos[2], self.right_wrist_pos[1], c='r')
+
+    def calculate_forward_kinematics(self):
+        """Calculate joint positions using forward kinematics."""
+        positions = {}
         
-        self.ax_robot.plot(
-            [self.robot_joints["left_shoulder"][0], waist_left[0]],
-            [self.robot_joints["left_shoulder"][1], waist_left[1]],
-            [self.robot_joints["left_shoulder"][2], waist_left[2]],
-            'k-', linewidth=2
-        )
-        self.ax_robot.plot(
-            [self.robot_joints["right_shoulder"][0], waist_right[0]],
-            [self.robot_joints["right_shoulder"][1], waist_right[1]],
-            [self.robot_joints["right_shoulder"][2], waist_right[2]],
-            'k-', linewidth=2
-        )
-        self.ax_robot.scatter(*self.robot_joints["torso"], c='black', marker='o', s=50)
-        self.ax_robot.plot(
-            [self.robot_joints["left_shoulder"][0], self.robot_joints["right_shoulder"][0]],
-            [self.robot_joints["left_shoulder"][1], self.robot_joints["right_shoulder"][1]],
-            [self.robot_joints["left_shoulder"][2], self.robot_joints["right_shoulder"][2]],
-            'k-', linewidth=3
-        )
+        # Base positions (shoulders)
+        shoulder_width = 0.3  # meters
+        positions['left_shoulder'] = np.array([-shoulder_width/2, 0, 0])
+        positions['right_shoulder'] = np.array([shoulder_width/2, 0, 0])
         
-        joint_positions = self.calculate_joint_positions()
-        
-        for side, color in [("right", "blue"), ("left", "green")]:
-            shoulder = self.robot_joints[f"{side}_shoulder"]
-            elbow = self.robot_joints[f"{side}_elbow"]
-            wrist = self.robot_joints[f"{side}_wrist"]
-            self.ax_robot.plot(
-                [shoulder[0], elbow[0]],
-                [shoulder[1], elbow[1]],
-                [shoulder[2], elbow[2]],
-                color=color, linewidth=3
-            )
-            self.ax_robot.plot(
-                [elbow[0], wrist[0]],
-                [elbow[1], wrist[1]],
-                [elbow[2], wrist[2]],
-                color=color, linewidth=3
-            )
-            shoulder_pitch = joint_positions[f"{side}_shoulder_pitch_joint"]
-            shoulder_yaw = joint_positions[f"{side}_shoulder_yaw_joint"]
-            shoulder_roll = joint_positions[f"{side}_shoulder_roll_joint"]
-            elbow_joint = joint_positions[f"{side}_elbow_joint"]
-            wrist_pitch = joint_positions[f"{side}_wrist_pitch_joint"]
-            wrist_yaw = joint_positions[f"{side}_wrist_yaw_joint"]
-            wrist_roll = joint_positions[f"{side}_wrist_roll_joint"]
+        for side in ['left', 'right']:
+            # Get current angles
+            shoulder_roll = np.radians(self.joint_angles[f'{side}_shoulder_roll_joint'])
+            shoulder_pitch = np.radians(self.joint_angles[f'{side}_shoulder_pitch_joint'])
+            shoulder_yaw = np.radians(self.joint_angles[f'{side}_shoulder_yaw_joint'])
+            elbow = np.radians(self.joint_angles[f'{side}_elbow_joint'])
             
-            self.ax_robot.scatter(shoulder_pitch[0], shoulder_pitch[1], shoulder_pitch[2], 
-                           color=color, s=80, marker='o', label=f"{side.capitalize()} Shoulder Pitch" if side=="right" else "")
-            self.ax_robot.scatter(shoulder_yaw[0], shoulder_yaw[1], shoulder_yaw[2], 
-                           color=color, s=50, marker='s', label=f"{side.capitalize()} Shoulder Yaw" if side=="right" else "")
-            self.ax_robot.scatter(shoulder_roll[0], shoulder_roll[1], shoulder_roll[2], 
-                           color=color, s=50, marker='^', label=f"{side.capitalize()} Shoulder Roll" if side=="right" else "")
-            self.ax_robot.scatter(elbow_joint[0], elbow_joint[1], elbow_joint[2], 
-                           color=color, s=60, marker='o', label=f"{side.capitalize()} Elbow" if side=="right" else "")
-            self.ax_robot.scatter(wrist_pitch[0], wrist_pitch[1], wrist_pitch[2], 
-                           color=color, s=40, marker='d', label=f"{side.capitalize()} Wrist Pitch" if side=="right" else "")
-            self.ax_robot.scatter(wrist_yaw[0], wrist_yaw[1], wrist_yaw[2], 
-                           color=color, s=40, marker='*', label=f"{side.capitalize()} Wrist Yaw" if side=="right" else "")
-            self.ax_robot.scatter(wrist_roll[0], wrist_roll[1], wrist_roll[2], 
-                           color=color, s=40, marker='p', label=f"{side.capitalize()} Wrist Roll" if side=="right" else "")
+            # Calculate elbow position
+            upper_arm = 0.3  # meters
+            elbow_offset = np.array([0, 0, -upper_arm])
             
-            self.ax_robot.plot(
-                [shoulder_pitch[0], shoulder_yaw[0]],
-                [shoulder_pitch[1], shoulder_yaw[1]],
-                [shoulder_pitch[2], shoulder_yaw[2]],
-                color=color, linewidth=1, linestyle=':'
-            )
-            self.ax_robot.plot(
-                [shoulder_pitch[0], shoulder_roll[0]],
-                [shoulder_pitch[1], shoulder_roll[1]],
-                [shoulder_pitch[2], shoulder_roll[2]],
-                color=color, linewidth=1, linestyle=':'
-            )
-            self.ax_robot.plot(
-                [wrist_pitch[0], wrist_yaw[0]],
-                [wrist_pitch[1], wrist_yaw[1]],
-                [wrist_pitch[2], wrist_yaw[2]],
-                color=color, linewidth=1, linestyle=':'
-            )
-            self.ax_robot.plot(
-                [wrist_pitch[0], wrist_roll[0]],
-                [wrist_pitch[1], wrist_roll[1]],
-                [wrist_pitch[2], wrist_roll[2]],
-                color=color, linewidth=1, linestyle=':'
-            )
+            # Apply shoulder transformations
+            R_roll = np.array([[1, 0, 0],
+                             [0, np.cos(shoulder_roll), -np.sin(shoulder_roll)],
+                             [0, np.sin(shoulder_roll), np.cos(shoulder_roll)]])
             
-        self.ax_robot.view_init(elev=15, azim=270)
-        self.ax_robot.legend(loc='upper right', fontsize='x-small', ncol=2)
-        self.fig_robot.canvas.draw()
-        self.fig_robot.canvas.flush_events()
+            R_pitch = np.array([[np.cos(shoulder_pitch), 0, np.sin(shoulder_pitch)],
+                              [0, 1, 0],
+                              [-np.sin(shoulder_pitch), 0, np.cos(shoulder_pitch)]])
+            
+            R_yaw = np.array([[np.cos(shoulder_yaw), -np.sin(shoulder_yaw), 0],
+                            [np.sin(shoulder_yaw), np.cos(shoulder_yaw), 0],
+                            [0, 0, 1]])
+            
+            # Combined rotation
+            R = R_yaw @ R_pitch @ R_roll
+            elbow_pos = positions[f'{side}_shoulder'] + R @ elbow_offset
+            positions[f'{side}_elbow'] = elbow_pos
+            
+            # Calculate wrist position
+            forearm = 0.3  # meters
+            wrist_offset = np.array([0, 0, -forearm])
+            
+            # Apply elbow rotation
+            R_elbow = np.array([[np.cos(elbow), -np.sin(elbow), 0],
+                              [np.sin(elbow), np.cos(elbow), 0],
+                              [0, 0, 1]])
+            
+            wrist_pos = elbow_pos + R @ R_elbow @ wrist_offset
+            positions[f'{side}_wrist'] = wrist_pos
+        
+        return positions
+
+    def update_visualization_positions(self):
+        positions = self.calculate_joint_positions()
+        self.left_shoulder_pos = positions["left_shoulder_pitch_joint"]
+        self.left_elbow_pos = positions["left_elbow_joint"]
+        self.left_wrist_pos = positions["left_wrist_pitch_joint"]
+        self.right_shoulder_pos = positions["right_shoulder_pitch_joint"]
+        self.right_elbow_pos = positions["right_elbow_joint"]
+        self.right_wrist_pos = positions["right_wrist_pitch_joint"]
+
+    def results_from_image(self, image):
+        results = self.pose.process(image)
+        if not results.pose_landmarks:
+            print("[WARN] No pose landmarks detected.")
+        else:
+            print("[INFO] Pose landmarks detected.")
+            self.mp_drawing.draw_landmarks(
+                image, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
