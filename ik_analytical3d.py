@@ -25,6 +25,10 @@ class IKAnalytical3D:
             'wrist_roll': (-1.97222, 1.97222)      # -113° to 113°
         }
 
+        # Validation parameters
+        self.position_tolerance = 1e-3  # 1mm tolerance
+        self.orientation_tolerance = 1e-2  # ~0.57 degrees
+
     def clip_to_limits(self, joint, angle):
         """Clip angle to joint limits"""
         if joint in self.joint_limits:
@@ -153,3 +157,116 @@ class IKAnalytical3D:
         roll = arctan2(R_wrist[1,0], R_wrist[0,0])
         
         return pitch, yaw, roll
+
+    def validate_ik_fk(self, joint_angles, target_position, target_orientation=None):
+        """
+        Validate IK solution using forward kinematics
+        :param joint_angles: Dictionary of joint angles
+        :param target_position: Target end-effector position
+        :param target_orientation: Optional target orientation matrix
+        :return: (bool, float) - (is_valid, position_error)
+        """
+        # Check joint limits first
+        if "right_shoulder_pitch_joint" in joint_angles:
+            prefix = "right"
+        elif "left_shoulder_pitch_joint" in joint_angles:
+            prefix = "left"
+        else:
+            raise ValueError("No recognized joint prefix (left/right) in joint_angles")
+        
+        remapped = {
+        'shoulder_pitch': joint_angles[f'{prefix}_shoulder_pitch_joint'],
+        'shoulder_yaw': joint_angles[f'{prefix}_shoulder_yaw_joint'],
+        'shoulder_roll': joint_angles[f'{prefix}_shoulder_roll_joint'],
+        'elbow': joint_angles[f'{prefix}_elbow_joint'],
+        'wrist_pitch': joint_angles[f'{prefix}_wrist_pitch_joint'],
+        'wrist_yaw': joint_angles[f'{prefix}_wrist_yaw_joint'],
+        'wrist_roll': joint_angles[f'{prefix}_wrist_roll_joint']
+         }
+
+        # ⬇️ Continue with your existing logic
+        for joint, angle in remapped.items():
+            if joint in self.joint_limits:
+                min_limit, max_limit = self.joint_limits[joint]
+            if not (min_limit <= angle <= max_limit):
+                return False, float('inf')
+
+        fk_position, fk_orientation = self.forward_kinematics(remapped)
+        position_error = np.linalg.norm(fk_position - target_position)
+        position_valid = position_error < self.position_tolerance
+
+        orientation_valid = True
+        if target_orientation is not None:
+            orientation_error = np.linalg.norm(fk_orientation - target_orientation)
+            orientation_valid = orientation_error < self.orientation_tolerance
+            
+        return position_valid and orientation_valid, position_error
+    def forward_kinematics(self, joint_angles):
+        """
+        Calculate end-effector position and orientation from joint angles
+        :param joint_angles: Dictionary of joint angles
+        :return: (position, orientation_matrix)
+        """
+        # Extract joint angles
+        sp = joint_angles['shoulder_pitch']
+        sy = joint_angles['shoulder_yaw']
+        sr = joint_angles['shoulder_roll']
+        elb = joint_angles['elbow']
+        wp = joint_angles['wrist_pitch']
+        wy = joint_angles['wrist_yaw']
+        wr = joint_angles['wrist_roll']
+        
+        # Calculate transformation matrices
+        T_shoulder = self.transform_matrix(sp, 0, 0, np.pi/2)
+        T_yaw = self.transform_matrix(sy, 0, 0, 0)
+        T_roll = self.transform_matrix(sr, 0, 0, 0)
+        T_elbow = self.transform_matrix(elb, 0, self.L1, 0)
+        T_wrist_pitch = self.transform_matrix(wp, 0, self.L2, 0)
+        T_wrist_yaw = self.transform_matrix(wy, 0, 0, 0)
+        T_wrist_roll = self.transform_matrix(wr, 0, 0, 0)
+        
+        # Calculate final transformation
+        T_final = T_shoulder @ T_yaw @ T_roll @ T_elbow @ T_wrist_pitch @ T_wrist_yaw @ T_wrist_roll
+        
+        # Extract position and orientation
+        position = T_final[:3, 3]
+        orientation = T_final[:3, :3]
+        
+        return position, orientation
+
+    def check_motion_continuity(self, joint_angles_sequence, max_velocity=1.0):
+        """
+        Check for sudden changes between consecutive joint angles
+        :param joint_angles_sequence: List of joint angle dictionaries
+        :param max_velocity: Maximum allowed joint velocity in rad/s
+        :return: (bool, list) - (is_continuous, problematic_joints)
+        """
+        if len(joint_angles_sequence) < 2:
+            return True, []
+            
+        problematic_joints = []
+        is_continuous = True
+        
+        for i in range(1, len(joint_angles_sequence)):
+            prev_angles = joint_angles_sequence[i-1]
+            curr_angles = joint_angles_sequence[i]
+            
+            for joint in prev_angles.keys():
+                velocity = abs(curr_angles[joint] - prev_angles[joint])
+                if velocity > max_velocity:
+                    is_continuous = False
+                    problematic_joints.append((joint, i, velocity))
+                    
+        return is_continuous, problematic_joints
+
+def validate_ik_fk(joint_angles, target_position):
+    # Calculate FK from joint angles
+    fk_position = forward_kinematics(joint_angles)
+    # Compare with target position
+    error = np.linalg.norm(fk_position - target_position)
+    return error < threshold
+
+def check_motion_continuity(joint_angles_sequence):
+    # Check for sudden changes between consecutive positions
+    max_velocity = calculate_joint_velocities(joint_angles_sequence)
+    return max_velocity < velocity_threshold

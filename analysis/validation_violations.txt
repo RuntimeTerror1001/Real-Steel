@@ -1,0 +1,4 @@
+right_shoulder_pitch_joint: Max acceleration 4.440 rad/s² exceeds limit 1.0
+right_shoulder_roll_joint: Max acceleration 1.220 rad/s² exceeds limit 1.0
+right_elbow_joint: Max velocity 2.126 rad/s exceeds limit 2.0
+right_elbow_joint: Max acceleration 6.902 rad/s² exceeds limit 1.0

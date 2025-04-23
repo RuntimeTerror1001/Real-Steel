@@ -71,6 +71,8 @@ class MotionSmoothener:
             'right_wrist_yaw_joint': 0.0
         }
 
+    def safe_copy(d):
+        return d.copy() if d is not None else {}
     def check_joint_limits(self, pose):
         """Check if all joint angles are within their limits."""
         for joint, value in pose.items():
@@ -83,7 +85,7 @@ class MotionSmoothener:
 
     def enforce_joint_limits(self, pose):
         """Clip joint angles to their limits."""
-        clipped_pose = pose.copy()
+        clipped_pose = self.safe_copy(pose)
         for joint, value in pose.items():
             if joint == 'timestamp':
                 continue

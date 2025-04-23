@@ -13,6 +13,10 @@ class RobotRetargeter:
         """Initialize the RobotRetargeter."""
         # Robot specifications - Unitree G1 humanoid model
         self.robot_type = robot_type
+        self.recording = False
+        self.recording_freq = recording_freq
+        self.last_record_time = 0
+        self.recording_file = None
 
         # Robot dimensions (in meters)
         self.dimensions = {
@@ -56,12 +60,10 @@ class RobotRetargeter:
         self.recording_freq = recording_freq
         self.csv_file = None
         self.csv_writer = None
-        self.last_record_time = 0
-        self.record_interval = 1.0 / recording_freq
         self.frame_counter = 0
         
         # Last valid angles for error recovery
-        self.last_valid_angles = self.joint_angles.copy()
+        self.last_valid_angles = self.safe_copy(self.joint_angles)
         
         # Arm kinematics module - analytical solver
         self.analytical_solver = IKAnalytical3D(
@@ -89,74 +91,117 @@ class RobotRetargeter:
         self.mp_pose = mp.solutions.pose
 
     def start_recording(self, filename="robot_motion.csv"):
-        """Start recording joint angles to CSV file."""
-        if self.is_recording:
+        """Start recording robot motion to CSV file."""
+        print(f"[TRACE] Started recording to {filename}")
+
+        if self.recording:
             print("Already recording")
             return
             
+        self.recording = True
+        self.start_time = time.time()
+        self.recording_file = filename
         self.csv_file = open(filename, 'w', newline='')
         self.csv_writer = csv.writer(self.csv_file)
         
-        header = ["timestamp"]
-        for joint in [
-            "left_shoulder_pitch_joint", "left_shoulder_yaw_joint", "left_shoulder_roll_joint",
-            "left_elbow_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", "left_wrist_roll_joint",
-            "right_shoulder_pitch_joint", "right_shoulder_yaw_joint", "right_shoulder_roll_joint",
-            "right_elbow_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint", "right_wrist_roll_joint"
-        ]:
+        # Write header
+        header = ['timestamp']
+        for joint in self.joint_angles.keys():
             header.append(joint)
-            
         self.csv_writer.writerow(header)
-        self.is_recording = True
-        self.start_time = time.time()
-        self.last_record_time = self.start_time
-        self.frame_counter = 0
+        
+        self.last_record_time = time.time()
         print(f"Recording started to {filename} at {self.recording_freq}Hz")
 
     def stop_recording(self):
         """Stop recording and close the CSV file."""
-        if not self.is_recording:
+        if not self.recording:
+            print("Not currently recording")
             return
-        self.is_recording = False
+            
+        self.recording = False
         if self.csv_file:
             self.csv_file.close()
             self.csv_file = None
             self.csv_writer = None
-        print("Recording stopped")
+        print(f"Recording stopped: {self.recording_file}")
+        self.recording_file = None
 
     def record_frame(self):
-        """Record current joint angles to CSV in MuJoCo-compatible format."""
-        if not self.is_recording:
+        """Record current joint angles to CSV with validation."""
+        print("[TRACE] record_frame() called")
+
+        if not self.recording:
+            print("[TRACE] Not Recording - skipping frame")
             return
+        
+        if self.frame_counter == 0 or (time.time() - self.start_time) >= self.frame_counter * (1.0 / self.recording_freq):
+
+            # Get current target position and orientation
+            target_position = self.robot_joints["right_wrist"]
+            target_orientation = None  # Can be added if needed
             
-        current_time = time.time()
-        if current_time - self.last_record_time >= self.record_interval:
-            timestamp = self.frame_counter * (1.0 / self.recording_freq)
-            mujoco_angles = self.convert_to_mujoco_precise(self.joint_angles, apply_offset=True)
+            try:
+                # Validate IK solution but don't block recording
+                is_valid, position_error = self.analytical_solver.validate_ik_fk(
+                    self.joint_angles, target_position, target_orientation
+                )
+                
+                if not is_valid:
+                    print(f"[WARNING] IK validation error {position_error:.6f}")
+
+                # Compute timestamp from frame index and frequency
+                timestamp = round(self.frame_counter * (1.0 / self.recording_freq), 3)
+
+                print(f"[RECORDING] Frame {self.frame_counter}, angles: {list(self.joint_angles.values())[:3]}...")
+
+                timestamp = self.frame_counter * (1.0 / self.recording_freq)
+                # Create row with timestamp and joint angles
+                row = [f"{timestamp:.3f}"]
+                for joint in self.joint_angles.keys():
+                    row.append(f"{self.joint_angles[joint]:.6f}")
+                
+                # Write row and flush to ensure data is saved
+                self.csv_writer.writerow(row)
+                self.csv_file.flush()
+                
+                # Update timing and frame counter
+                self.frame_counter += 1
+                
+                if self.frame_counter % 100 == 0:  # Reduced frequency of progress updates
+                    print(f"Recorded {self.frame_counter} frames")
+                    
+            except Exception as e:
+                print(f"[ERROR] Recording failed: {str(e)}")
+
+    def validate_recorded_motion(self, csv_file):
+        """Validate the entire recorded motion sequence."""
+        joint_angles_sequence = []
+        
+        # Read the CSV file
+        with open(csv_file, 'r') as f:
+            reader = csv.reader(f)
+            header = next(reader)  # Skip header
             
-            # Create row with timestamp and joint angles
-            row = [f"{timestamp:.3f}"]
-            for joint in [
-                'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint', 
-                'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint',
-                'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint', 
-                'right_elbow_joint', 'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint'
-            ]:
-                angle = mujoco_angles.get(joint, 0.0)
-                if np.isnan(angle):
-                    angle = 0.0  # Replace NaN with 0.0
-                row.append(f"{angle:.6f}")
-            
-            # Write row and flush to ensure data is saved
-            self.csv_writer.writerow(row)
-            self.csv_file.flush()
-            
-            self.last_record_time = current_time
-            self.frame_counter += 1
-            
-            if self.frame_counter % 30 == 0:
-                print(f"Recorded frame {self.frame_counter} at {timestamp:.2f}s")
-    
+            for row in reader:
+                # Convert row to joint angles dictionary
+                angles = {}
+                for i, joint in enumerate(header[1:], 1):  # Skip timestamp
+                    angles[joint] = float(row[i])
+                joint_angles_sequence.append(angles)
+        
+        # Check motion continuity
+        is_continuous, problematic_joints = self.analytical_solver.check_motion_continuity(
+            joint_angles_sequence
+        )
+        
+        if not is_continuous:
+            print("Warning: Motion contains sudden changes:")
+            for joint, frame, velocity in problematic_joints:
+                print(f"  - {joint} at frame {frame} with velocity {velocity:.3f} rad/s")
+        
+        return is_continuous, problematic_joints
+
     def calculate_joint_positions(self):
         """Calculate 3D positions for all robot joints based on current skeleton."""
         positions = {}
@@ -250,7 +295,10 @@ class RobotRetargeter:
             })
         except Exception as e:
             print(f"[ERROR] IK calculation failed: {str(e)}")
-            self.joint_angles = self.last_valid_angles.copy()
+            self.joint_angles = self.safe_copy(self.last_valid_angles)
+
+        print("[DEBUG] Computed joint angles:", self.joint_angles)
+
         self.update_visualization_positions()
 
     def calculate_joint_angles(self, side="right"):
@@ -259,7 +307,9 @@ class RobotRetargeter:
             shoulder = self.robot_joints[f"{side}_shoulder"]
             elbow = self.robot_joints[f"{side}_elbow"]
             wrist = self.robot_joints[f"{side}_wrist"]
+            
             angles = self.analytical_solver.solve(shoulder, elbow, wrist)
+            
             # Standardize output keys to *_joint
             angles_3d = {
                 f"{side}_shoulder_pitch_joint": angles.get("shoulder_pitch", 0.0),
@@ -270,11 +320,19 @@ class RobotRetargeter:
                 f"{side}_wrist_yaw_joint": angles.get("wrist_yaw", 0.0),
                 f"{side}_wrist_roll_joint": angles.get("wrist_roll", 0.0),
             }
+            
+            # Check joint limits silently and clip values
+            for joint, angle in angles_3d.items():
+                if joint in self.joint_limits:
+                    min_limit, max_limit = self.joint_limits[joint]
+                    if not (min_limit <= angle <= max_limit):
+                        angles_3d[joint] = np.clip(angle, min_limit, max_limit)
+            
             self.last_valid_angles.update(angles_3d)
             return angles_3d
         except Exception as e:
-            print(f"[ERROR] Error calculating joint angles for {side} arm: {e}")
-            return self.last_valid_angles.copy()
+            print(f"[ERROR] IK failed for {side} arm: {str(e)}")
+            return self.safe_copy(self.last_valid_angles)
 
     def apply_smooth_limit(self, angle, joint_type, side=None):
         """Apply joint limits with smooth transitions."""
@@ -350,7 +408,7 @@ class RobotRetargeter:
                 self.joint_angles[joint] = raw_angle
                 self.joint_angle_history[joint].append(raw_angle)
         
-        self.previous_joint_angles = self.joint_angles.copy()
+            self.previous_joint_angles = self.safe_copy(self.joint_angles)
 
     def apply_limit(self, angle, joint_type, side=None):
         limits = self.joint_limits.get(joint_type)
@@ -418,7 +476,7 @@ class RobotRetargeter:
         """Convert joint angles from the retargeter convention to MuJoCo convention."""
         mujoco_angles = {}
         if not apply_offset:
-            return angles.copy()
+            return self.safe_copy(angles)
         
         # Apply simple mirroring for right arm joints
         for joint, angle in angles.items():
@@ -552,3 +610,7 @@ class RobotRetargeter:
             print("[INFO] Pose landmarks detected.")
             self.mp_drawing.draw_landmarks(
                 image, results.pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
+    
+    @staticmethod
+    def safe_copy(d):
+        return d.copy() if d is not None else {}

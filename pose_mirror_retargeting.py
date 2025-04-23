@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 import time
+from datetime import datetime
 
 from robot_retargeter import RobotRetargeter
 
@@ -19,14 +20,16 @@ class PoseMirror3DWithRetargeting:
         self.pose = self.mp_pose.Pose(
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7,
-            model_complexity=1
+            model_complexity=1,
+            enable_segmentation=True,  # Enable segmentation for better results
+            smooth_landmarks=True  # Enable landmark smoothing
         )
         
         # Initialize visualization
         self._setup_visualization()
         
         # Initialize robot retargeter
-        self.robot_retargeter = RobotRetargeter(recording_freq=20)
+        self.robot_retargeter = RobotRetargeter(recording_freq=10)
         self.robot_retargeter.ax_robot = self.ax_robot
         self.robot_retargeter.fig_robot = self.fig
         
@@ -43,39 +46,46 @@ class PoseMirror3DWithRetargeting:
         
     def _setup_visualization(self):
         """Set up all visualization components."""
+        # Initialize pygame
+        pygame.init()
+        pygame.display.set_caption('Motion Retargeting')
+        self.screen = pygame.display.set_mode(self.window_size)
+        
         # Initialize matplotlib
         plt.ion()
         self.fig = plt.figure(figsize=(20, 6))
         self.fig.canvas.manager.set_window_title('Motion Retargeting Visualization')
         
-        # Create subplots
-        self.ax_human = self.fig.add_subplot(131, projection='3d')
-        self.ax_robot = self.fig.add_subplot(132, projection='3d')
-        self.ax_angles = self.fig.add_subplot(133)
+        # Create subplots for different views
+        self.ax_camera = self.fig.add_subplot(141)  # Camera feed
+        self.ax_3d = self.fig.add_subplot(142, projection='3d')
+        self.ax_robot = self.fig.add_subplot(143, projection='3d')
+        self.ax_angles = self.fig.add_subplot(144)
         
-        # Configure subplot titles
-        self.ax_human.set_title('Human Pose')
-        self.ax_robot.set_title('Robot Simulation')
+        # Set up camera view
+        self.ax_camera.set_title('Camera Feed')
+        self.ax_camera.axis('off')
+        
+        # Set up 3D view limits
+        self.ax_3d.set_xlim(-1, 1)
+        self.ax_3d.set_ylim(-1, 1)
+        self.ax_3d.set_zlim(-1, 1)
+        
+        # Set up robot view limits
+        self.ax_robot.set_xlim(-0.5, 0.5)
+        self.ax_robot.set_ylim(-0.5, 0.5)
+        self.ax_robot.set_zlim(-0.5, 0.5)
+        
+        # Set labels
+        self.ax_3d.set_title('Human Pose')
+        self.ax_robot.set_title('Robot Pose')
         self.ax_angles.set_title('Joint Angles')
         
-        # Set up 3D plot parameters
-        self.view_limits = 0.8
-        for ax in [self.ax_human, self.ax_robot]:
-            ax.set_xlim([-self.view_limits, self.view_limits])
-            ax.set_ylim([-self.view_limits, self.view_limits])
-            ax.set_zlim([-self.view_limits, self.view_limits])
-            ax.set_xlabel('X')
-            ax.set_ylabel('Z')
-            ax.set_zlabel('Y')
-            ax.view_init(elev=0, azim=270)
-            ax.grid(True)
-        
-        plt.tight_layout()
-        
-        # Initialize pygame
-        pygame.init()
-        self.screen = pygame.display.set_mode(self.window_size)
-        pygame.display.set_caption("3D Pose Mirror - With Robot Retargeting")
+        # Initialize empty plots
+        self.human_plot = None
+        self.robot_plot = None
+        self.angle_plot = None
+        self.camera_plot = None
         
     def calculate_body_plane_angle(self, landmarks):
         """Calculate the angle between the body plane and camera plane."""
@@ -137,29 +147,35 @@ class PoseMirror3DWithRetargeting:
             
         return self.current_rotation_angle
 
-    def update_visualization(self, results):
+    def update_visualization(self, results, image=None):
         """Update all visualizations with the latest pose data."""
-        if not results.pose_world_landmarks:
-            return
-
-        # Clear all plots
-        self.ax_human.clear()
+        # Clear all plots except camera feed
+        self.ax_3d.clear()
         self.ax_robot.clear()
         self.ax_angles.clear()
+        
+        # Update camera feed without clearing
+        if image is not None:
+            if not hasattr(self, 'camera_image'):
+                self.camera_image = self.ax_camera.imshow(image)
+                self.ax_camera.axis('off')
+            else:
+                self.camera_image.set_data(image)
+            self.ax_camera.set_title('Camera Feed')
 
-        # Update human pose visualization
-        self._update_human_pose(results.pose_world_landmarks)
-        
-        # Update robot visualization
-        self.robot_retargeter.update_robot_plot(self.ax_robot)
-        
-        # Update joint angles visualization
-        if self.joint_angles:
-            self._update_joint_angles()
+        if results and results.pose_world_landmarks:
+            # Update human pose visualization
+            self._update_human_pose(results.pose_world_landmarks)
+            
+            # Update robot visualization
+            self.robot_retargeter.update_robot_plot(self.ax_robot)
+            
+            # Update joint angles visualization
+            if self.joint_angles:
+                self._update_joint_angles()
 
         # Refresh the display
-        plt.tight_layout()
-        self.fig.canvas.draw()
+        self.fig.canvas.draw_idle()  # Only redraw what's necessary
         self.fig.canvas.flush_events()
 
     def _update_human_pose(self, world_landmarks):
@@ -172,22 +188,22 @@ class PoseMirror3DWithRetargeting:
         z_coords = [-lm.y for lm in landmarks]  # Use -y for forward
 
         # Plot landmarks
-        self.ax_human.scatter3D(x_coords, z_coords, y_coords, c='b', marker='o')
+        self.ax_3d.scatter3D(x_coords, z_coords, y_coords, c='b', marker='o')
 
         # Plot connections
         for connection in self.mp_pose.POSE_CONNECTIONS:
             start_idx = connection[0]
             end_idx = connection[1]
-            self.ax_human.plot3D([x_coords[start_idx], x_coords[end_idx]],
+            self.ax_3d.plot3D([x_coords[start_idx], x_coords[end_idx]],
                                [z_coords[start_idx], z_coords[end_idx]],
                                [y_coords[start_idx], y_coords[end_idx]], 'b-')
 
         # Set plot properties
-        self.ax_human.set_xlabel('X (Left-Right)')
-        self.ax_human.set_ylabel('Z (Forward-Back)')
-        self.ax_human.set_zlabel('Y (Up-Down)')
-        self.ax_human.view_init(elev=0, azim=270)
-        self.ax_human.set_box_aspect([1,1,1])
+        self.ax_3d.set_xlabel('X (Left-Right)')
+        self.ax_3d.set_ylabel('Z (Forward-Back)')
+        self.ax_3d.set_zlabel('Y (Up-Down)')
+        self.ax_3d.view_init(elev=0, azim=270)
+        self.ax_3d.set_box_aspect([1,1,1])
 
     def _update_joint_angles(self):
         """Update the joint angles visualization."""
@@ -231,17 +247,29 @@ class PoseMirror3DWithRetargeting:
     def update_robot_state(self, results):
         """Update robot state based on pose detection results."""
         if not results.pose_world_landmarks:
+            print("No pose landmarks detected - skipping update")
             return
 
-        # Retarget pose and calculate joint angles
-        self.robot_retargeter.retarget_pose(results.pose_world_landmarks, self.current_rotation_angle)
-        
-        # Update joint angles
-        self.joint_angles = {
-            **self.robot_retargeter.calculate_joint_angles("left"),
-            **self.robot_retargeter.calculate_joint_angles("right")
-        }
-        self.robot_retargeter.joint_angles.update(self.joint_angles)
+        try:
+            # Retarget pose and calculate joint angles
+            print("Updating robot state with new pose")
+            self.robot_retargeter.retarget_pose(results.pose_world_landmarks, self.current_rotation_angle)
+            
+            # # Update joint angles
+            # self.joint_angles = {
+            #     **self.robot_retargeter.calculate_joint_angles("left"),
+            #     **self.robot_retargeter.calculate_joint_angles("right")
+            # }
+            print("Calculated joint angles:", self.joint_angles)
+            
+            self.robot_retargeter.joint_angles.update(self.safe_copy(self.joint_angles))
+
+            # Record frame if recording is active
+            self.robot_retargeter.record_frame()
+
+        except Exception as e:
+            print(f"[ERROR] Failed to update robot state: {str(e)}")
+            # Continue with visualization even if update fails
 
         # Update visualization
         self.update_visualization(results)
@@ -249,32 +277,83 @@ class PoseMirror3DWithRetargeting:
     def run(self):
         """Main run loop for pose detection and visualization."""
         cap = cv2.VideoCapture(0)
-        for _ in range(5):
-            cap.read()
+        
+        # Set camera properties for better performance
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
+        cap.set(cv2.CAP_PROP_FPS, 30)  # Set to 30fps
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer delay
+        
         try:
-            while cap.isOpened():
+            running = True
+            while running and cap.isOpened():
+                # Handle pygame events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        break
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_q:  # Quit
+                            running = False
+                            break
+                        elif event.key == pygame.K_r:  # Reset calibration
+                            print("Resetting calibration...")
+                            self.initial_angle_set = False
+                            self.angle_offset = 0
+                        elif event.key == pygame.K_s:  # Start/stop recording
+                            if self.robot_retargeter.recording:
+                                self.robot_retargeter.stop_recording()
+                            else:
+                                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                                filename = f"recordings/robot_motion_{timestamp}.csv"
+                                self.robot_retargeter.start_recording(filename)
+                        elif event.key == pygame.K_LEFT:
+                            self.current_rotation_angle += 5
+                        elif event.key == pygame.K_RIGHT:
+                            self.current_rotation_angle -= 5
+
+                if not running:
+                    break
+
+                # Read camera frame
                 success, image = cap.read()
                 if not success:
                     print("Failed to capture frame from camera.")
                     continue
 
-                # Process image
-                image.flags.writeable = False
+                # Convert to RGB for processing
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                image.flags.writeable = False  # Pass by reference
+                
+                # Process image with MediaPipe
                 results = self.pose.process(image)
+                
+                # Make image writeable again for drawing
+                image.flags.writeable = True
+                
+                # Draw pose landmarks on image
+                if results.pose_landmarks:
+                    self.mp_drawing.draw_landmarks(
+                        image,
+                        results.pose_landmarks,
+                        self.mp_pose.POSE_CONNECTIONS,
+                        self.mp_drawing.DrawingSpec(color=(245,117,66), thickness=2, circle_radius=2),
+                        self.mp_drawing.DrawingSpec(color=(245,66,230), thickness=2, circle_radius=2)
+                    )
 
-                # Update robot state and visualization
+                # Update robot state
                 self.update_robot_state(results)
+                
+                # Update visualization with the annotated image
+                self.update_visualization(results, image)
 
-                # Check for exit
-                if cv2.waitKey(5) & 0xFF == 27:
-                    break
+                # Small delay to maintain stable framerate
+                plt.pause(0.01)  # Increased from 0.001 to 0.01 for stability
 
         finally:
             # Cleanup
+            if self.robot_retargeter.recording:
+                self.robot_retargeter.stop_recording()
             cap.release()
             cv2.destroyAllWindows()
             pygame.quit()
@@ -283,9 +362,13 @@ class PoseMirror3DWithRetargeting:
     def smooth_joint_angles(self):
         """Smooth the joint angles using exponential smoothing."""
         alpha = 0.7  # Smoothing factor (0 < alpha < 1)
-        previous_joint_angles = self.joint_angles.copy()
+        previous_joint_angles = self.safe_copy(self.joint_angles)
         for joint in self.joint_angles:
             self.joint_angles[joint] = (
                 alpha * self.joint_angles[joint] +
                 (1 - alpha) * previous_joint_angles[joint]
             )
+    
+    @staticmethod
+    def safe_copy(d):
+        return d.copy() if d is not None else {}
