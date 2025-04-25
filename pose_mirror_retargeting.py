@@ -207,8 +207,8 @@ class PoseMirror3DWithRetargeting:
         self.ax.clear()
         
         # Set up the 3D axes
-        self.ax.set_xlabel('X (Left-Right)')
-        self.ax.set_ylabel('Z (Forward-Back)')
+        self.ax.set_xlabel('Z (Left-Right)')
+        self.ax.set_ylabel('X (Forward-Back)')
         self.ax.set_zlabel('Y (Up-Down)')
         
         # Set fixed limits
@@ -230,12 +230,12 @@ class PoseMirror3DWithRetargeting:
             
             for landmark in landmarks:
                 # Apply the mapping based on the debug output
-                x.append(-landmark.x)    # Flip x to make right positive
-                y.append(-landmark.z)    # Use -z for up
+                x.append(-landmark.z)    # Flip x to make right positive
+                y.append(landmark.x)    # Use -z for up
                 z.append(-landmark.y)    # Use -y for forward
             
             # Plot landmarks
-            self.ax.scatter(x, y, z, c='r', marker='o')
+            self.ax.scatter(x, y, z, marker='o')
             
             # Draw connections
             for connection in self.mp_pose.POSE_CONNECTIONS:
@@ -247,7 +247,7 @@ class PoseMirror3DWithRetargeting:
                             [z[start_idx], z[end_idx]], 'b-')
         
         # View from the front
-        self.ax.view_init(elev=15, azim=270)
+        self.ax.view_init(elev=0, azim=0)
         
         # Add coordinate axis markers
         # origin = [0, 0, 0]
