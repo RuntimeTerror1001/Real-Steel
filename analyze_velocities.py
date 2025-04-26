@@ -196,7 +196,7 @@ def plot_joint_errors(data, limit_violations, ik_analysis):
 
 def main():
     # Read the CSV file
-    data = pd.read_csv('recordings/retargeted_motion.csv')
+    data = pd.read_csv('/recordings/robot_motion_20250424-101531.csv')
     
     # Check joint limits
     limit_violations = check_joint_limits(data)

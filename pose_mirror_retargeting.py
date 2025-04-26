@@ -6,6 +6,9 @@ import numpy as np
 import math
 import time
 from datetime import datetime
+from kinematic_validator import KinematicValidator
+import pandas as pd
+from ik_analytical3d import IKAnalytical3D
 
 from robot_retargeter import RobotRetargeter
 
@@ -21,15 +24,15 @@ class PoseMirror3DWithRetargeting:
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7,
             model_complexity=1,
-            enable_segmentation=True,  # Enable segmentation for better results
-            smooth_landmarks=True  # Enable landmark smoothing
+            enable_segmentation=True,   # Enable segmentation for better results
+            smooth_landmarks=False       # Disable landmark smoothing for raw validation
         )
         
         # Initialize visualization
         self._setup_visualization()
         
         # Initialize robot retargeter
-        self.robot_retargeter = RobotRetargeter(recording_freq=10)
+        self.robot_retargeter = RobotRetargeter(robot_type="unitree_g1", recording_freq=10)
         self.robot_retargeter.ax_robot = self.ax_robot
         self.robot_retargeter.fig_robot = self.fig
         
@@ -255,12 +258,15 @@ class PoseMirror3DWithRetargeting:
             print("Updating robot state with new pose")
             self.robot_retargeter.retarget_pose(results.pose_world_landmarks, self.current_rotation_angle)
             
-            # # Update joint angles
-            # self.joint_angles = {
-            #     **self.robot_retargeter.calculate_joint_angles("left"),
-            #     **self.robot_retargeter.calculate_joint_angles("right")
-            # }
+            # Update joint angles
+            self.joint_angles = {
+                **self.robot_retargeter.calculate_joint_angles("left"),
+                **self.robot_retargeter.calculate_joint_angles("right")
+            }
             print("Calculated joint angles:", self.joint_angles)
+            
+            # Apply exponential smoothing to reduce jitter
+            self.smooth_joint_angles()
             
             self.robot_retargeter.joint_angles.update(self.safe_copy(self.joint_angles))
 
@@ -302,7 +308,30 @@ class PoseMirror3DWithRetargeting:
                             self.angle_offset = 0
                         elif event.key == pygame.K_s:  # Start/stop recording
                             if self.robot_retargeter.recording:
+                                # Capture the recording filename and stop
+                                filename = self.robot_retargeter.recording_file
                                 self.robot_retargeter.stop_recording()
+                                # Run FK<->IK kinematics validation
+                                df = pd.read_csv(filename)
+                                # Convert rows to joint-angle dicts keyed by solver's expected names
+                                seq = []
+                                for row in df.to_dict(orient='records'):
+                                    angles = {
+                                        k.replace('right_','').replace('_joint',''): float(v)
+                                        for k, v in row.items() if k.startswith('right_')
+                                    }
+                                    seq.append(angles)
+                                validator = KinematicValidator(self.robot_retargeter.analytical_solver)
+                                # Run validation: new signature returns (errors_seq, skipped_frames)
+                                errors_seq, skipped = validator.validate_sequence(seq)
+                                stats = validator.summarize(errors_seq, skipped)
+                                valid = validator.is_sequence_valid(errors_seq, skipped)
+                                print("=== FK↔IK Round-Trip Validation ===")
+                                for joint, st in stats.items():
+                                    if joint != 'skipped_frames':
+                                        print(f"{joint:>14}: max={st['max']:.3e}, rms={st['rms']:.3e}")
+                                print(f"skipped_frames: {stats['skipped_frames']}")
+                                print(f"sequence_valid: {valid}")
                             else:
                                 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                                 filename = f"recordings/robot_motion_{timestamp}.csv"
@@ -360,14 +389,29 @@ class PoseMirror3DWithRetargeting:
             plt.close('all')
 
     def smooth_joint_angles(self):
-        """Smooth the joint angles using exponential smoothing."""
-        alpha = 0.7  # Smoothing factor (0 < alpha < 1)
-        previous_joint_angles = self.safe_copy(self.joint_angles)
+        """Apply exponential smoothing to joint angles to reduce jitter."""
+        if not hasattr(self, 'smoothed_angles'):
+            # Initialize smoothed angles with current values
+            self.smoothed_angles = self.safe_copy(self.joint_angles)
+            return
+
+        # Smoothing factor (0.0 to 1.0)
+        # Lower values = more smoothing but more lag
+        # Higher values = less smoothing but more responsive
+        smoothing_factor = 0.3
+
+        # Apply exponential smoothing to each joint angle
         for joint in self.joint_angles:
-            self.joint_angles[joint] = (
-                alpha * self.joint_angles[joint] +
-                (1 - alpha) * previous_joint_angles[joint]
-            )
+            if joint in self.smoothed_angles:
+                # Calculate smoothed value
+                smoothed = (smoothing_factor * self.joint_angles[joint] + 
+                          (1 - smoothing_factor) * self.smoothed_angles[joint])
+                self.smoothed_angles[joint] = smoothed
+            else:
+                self.smoothed_angles[joint] = self.joint_angles[joint]
+
+        # Update joint angles with smoothed values
+        self.joint_angles = self.safe_copy(self.smoothed_angles)
     
     @staticmethod
     def safe_copy(d):

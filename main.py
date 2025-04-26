@@ -8,8 +8,12 @@ and recorded to CSV files.
 import os
 import argparse
 from datetime import datetime
+import pygame
 
 from pose_mirror_retargeting import PoseMirror3DWithRetargeting
+from kinematic_validator import KinematicValidator
+import pandas as pd
+from ik_analytical3d import IKAnalytical3D
 
 def main():
     """Main entry point for the Real-Steel motion retargeting system."""

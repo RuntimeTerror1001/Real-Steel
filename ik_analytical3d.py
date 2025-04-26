@@ -26,8 +26,8 @@ class IKAnalytical3D:
         }
 
         # Validation parameters
-        self.position_tolerance = 1e-3  # 1mm tolerance
-        self.orientation_tolerance = 1e-2  # ~0.57 degrees
+        self.position_tolerance = 1e-6  # 1 µm tolerance
+        self.orientation_tolerance = 1e-4  # ~0.0057 degrees
 
     def clip_to_limits(self, joint, angle):
         """Clip angle to joint limits"""
@@ -49,15 +49,25 @@ class IKAnalytical3D:
     def solve(self, shoulder, elbow, wrist, target_orientation=None):
         """
         Solve full IK chain from shoulder to wrist with orientation
-        :param shoulder: np.array(3,) Shoulder 3D point
-        :param elbow:    np.array(3,) Elbow 3D point
-        :param wrist:    np.array(3,) Wrist 3D point
+        :param shoulder: np.array(3,) Shoulder 3D point in world frame
+        :param elbow:    np.array(3,) Elbow 3D point in world frame
+        :param wrist:    np.array(3,) Wrist 3D point in world frame
         :param target_orientation: np.array(3,3) Optional target orientation matrix
         :return: Dictionary of 7 joint angles
         """
-        # Convert points to local coordinate system
+        # Convert points to shoulder-local coordinate system
         local_elbow = elbow - shoulder
         local_wrist = wrist - shoulder
+
+        # Normalize vectors to unit length for stability
+        local_elbow_norm = np.linalg.norm(local_elbow)
+        local_wrist_norm = np.linalg.norm(local_wrist)
+        
+        if local_elbow_norm < 1e-8 or local_wrist_norm < 1e-8:
+            raise ValueError("Points too close to shoulder")
+            
+        local_elbow = local_elbow / local_elbow_norm
+        local_wrist = local_wrist / local_wrist_norm
 
         # 1. Solve shoulder angles
         sp, sy, sr = self._shoulder_angles(local_elbow, local_wrist)
@@ -84,7 +94,7 @@ class IKAnalytical3D:
         wy = self.clip_to_limits('wrist_yaw', wy)
         wr = self.clip_to_limits('wrist_roll', wr)
 
-        return {
+        angles = {
             'shoulder_pitch': sp,
             'shoulder_yaw': sy,
             'shoulder_roll': sr,
@@ -93,6 +103,23 @@ class IKAnalytical3D:
             'wrist_yaw': wy,
             'wrist_roll': wr
         }
+
+        # ——— one quick positional "nudge" ———
+        fk_pos, _ = self.forward_kinematics(angles)
+        target_local = wrist - shoulder
+        err = target_local - fk_pos
+        if np.linalg.norm(err) > self.position_tolerance:
+            δ = 1e-6
+            # approximate dP/dsp
+            ang2 = angles.copy()
+            ang2['shoulder_pitch'] += δ
+            fk2, _ = self.forward_kinematics(ang2)
+            jac_sp = (fk2 - fk_pos) / δ
+            # project error onto that direction
+            angles['shoulder_pitch'] += 0.1 * jac_sp.dot(err)
+        # ————————————————————————————————
+
+        return angles
 
     def _shoulder_angles(self, local_elbow, local_wrist):
         """Calculate shoulder angles using geometric approach"""
@@ -144,25 +171,33 @@ class IKAnalytical3D:
 
     def _wrist_angles_with_orientation(self, shoulder, elbow, wrist, target_orientation, sp, sy, sr, elb):
         """Calculate wrist angles considering target orientation"""
-        # Calculate current orientation matrix
-        R_shoulder = self.transform_matrix(sp, 0, 0, np.pi/2)[:3,:3]
-        R_elbow = self.transform_matrix(elb, 0, self.L1, 0)[:3,:3]
-        
-        # Required wrist orientation
-        R_wrist = np.linalg.inv(R_shoulder @ R_elbow) @ target_orientation
-        
-        # Extract Euler angles from rotation matrix
-        pitch = arctan2(R_wrist[2,1], R_wrist[2,2])
-        yaw = arctan2(-R_wrist[2,0], sqrt(R_wrist[2,1]**2 + R_wrist[2,2]**2))
-        roll = arctan2(R_wrist[1,0], R_wrist[0,0])
-        
-        return pitch, yaw, roll
+        # Build full upstream rotation (shoulder pitch, yaw, roll, then elbow)
+        T_sp       = self.transform_matrix(sp,   0,       0,      np.pi/2)
+        T_sy       = self.transform_matrix(sy,   0,       0,      0)
+        T_sr       = self.transform_matrix(sr,   0,       0,      0)
+        T_elb      = self.transform_matrix(elb,  0,   self.L1,      0)
+        R_partial  = (T_sp @ T_sy @ T_sr @ T_elb)[:3, :3]
+
+        # Invert that to isolate the wrist orientation
+        R_wrist    = np.linalg.inv(R_partial) @ target_orientation
+
+        # Extract Euler angles for wrist pitch, yaw, roll
+        pitch      = np.arctan2(R_wrist[2,1],                 R_wrist[2,2])
+        yaw        = np.arctan2(-R_wrist[2,0], np.sqrt(R_wrist[2,1]**2 + R_wrist[2,2]**2))
+        roll       = np.arctan2(R_wrist[1,0],                 R_wrist[0,0])
+
+        # Clip to limits and return
+        return (
+            self.clip_to_limits('wrist_pitch', pitch),
+            self.clip_to_limits('wrist_yaw',   yaw),
+            self.clip_to_limits('wrist_roll',  roll)
+        )
 
     def validate_ik_fk(self, joint_angles, target_position, target_orientation=None):
         """
         Validate IK solution using forward kinematics
         :param joint_angles: Dictionary of joint angles
-        :param target_position: Target end-effector position
+        :param target_position: Target end-effector position in shoulder frame
         :param target_orientation: Optional target orientation matrix
         :return: (bool, float) - (is_valid, position_error)
         """
@@ -175,32 +210,40 @@ class IKAnalytical3D:
             raise ValueError("No recognized joint prefix (left/right) in joint_angles")
         
         remapped = {
-        'shoulder_pitch': joint_angles[f'{prefix}_shoulder_pitch_joint'],
-        'shoulder_yaw': joint_angles[f'{prefix}_shoulder_yaw_joint'],
-        'shoulder_roll': joint_angles[f'{prefix}_shoulder_roll_joint'],
-        'elbow': joint_angles[f'{prefix}_elbow_joint'],
-        'wrist_pitch': joint_angles[f'{prefix}_wrist_pitch_joint'],
-        'wrist_yaw': joint_angles[f'{prefix}_wrist_yaw_joint'],
-        'wrist_roll': joint_angles[f'{prefix}_wrist_roll_joint']
-         }
+            'shoulder_pitch': joint_angles[f'{prefix}_shoulder_pitch_joint'],
+            'shoulder_yaw': joint_angles[f'{prefix}_shoulder_yaw_joint'],
+            'shoulder_roll': joint_angles[f'{prefix}_shoulder_roll_joint'],
+            'elbow': joint_angles[f'{prefix}_elbow_joint'],
+            'wrist_pitch': joint_angles[f'{prefix}_wrist_pitch_joint'],
+            'wrist_yaw': joint_angles[f'{prefix}_wrist_yaw_joint'],
+            'wrist_roll': joint_angles[f'{prefix}_wrist_roll_joint']
+        }
 
-        # ⬇️ Continue with your existing logic
+        # Check joint limits
         for joint, angle in remapped.items():
             if joint in self.joint_limits:
                 min_limit, max_limit = self.joint_limits[joint]
-            if not (min_limit <= angle <= max_limit):
-                return False, float('inf')
+                if not (min_limit <= angle <= max_limit):
+                    return False, float('inf')
 
-        fk_position, fk_orientation = self.forward_kinematics(remapped)
-        position_error = np.linalg.norm(fk_position - target_position)
-        position_valid = position_error < self.position_tolerance
+        # Compute forward kinematics
+        fk_pos, fk_ori = self.forward_kinematics(remapped)
+        
+        # Compute position error
+        position_error = np.linalg.norm(fk_pos - target_position)
+        
+        # Check if error is within tolerance
+        is_valid = position_error < self.position_tolerance
+        
+        # If orientation is provided, check orientation error
+        if target_orientation is not None and fk_ori is not None:
+            # Compute orientation error as the angle between rotation matrices
+            R_error = fk_ori @ target_orientation.T
+            orientation_error = np.arccos((np.trace(R_error) - 1) / 2)
+            is_valid = is_valid and (orientation_error < self.orientation_tolerance)
+        
+        return is_valid, position_error
 
-        orientation_valid = True
-        if target_orientation is not None:
-            orientation_error = np.linalg.norm(fk_orientation - target_orientation)
-            orientation_valid = orientation_error < self.orientation_tolerance
-            
-        return position_valid and orientation_valid, position_error
     def forward_kinematics(self, joint_angles):
         """
         Calculate end-effector position and orientation from joint angles

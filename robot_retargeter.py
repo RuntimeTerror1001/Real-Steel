@@ -18,13 +18,16 @@ class RobotRetargeter:
         self.last_record_time = 0
         self.recording_file = None
 
-        # Robot dimensions (in meters)
+        # Robot dimensions (in meters) — match IKAnalytical3D defaults for consistency
         self.dimensions = {
             "shoulder_width": 0.200,
-            "upper_arm_length": 0.300,
-            "lower_arm_length": 0.300,
+            "upper_arm_length": 0.1032,  # use same L1 as IKAnalytical3D
+            "lower_arm_length": 0.1000,  # use same L2 as IKAnalytical3D
             "torso_height": 0.4,
         }
+        
+        # Scale factor for converting human dimensions to robot dimensions
+        self.scale = 0.5  # Adjust this value based on your specific needs
         
         # Current robot joint positions (3D coordinates)
         self.robot_joints = {
@@ -90,6 +93,33 @@ class RobotRetargeter:
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_pose = mp.solutions.pose
 
+        # Enhanced motion smoothing parameters
+        self.smoothing_window = 5  # Number of frames for moving average
+        self.acceleration_window = 3  # Window for acceleration smoothing
+        self.velocity_window = 3  # Window for velocity smoothing
+        self.motion_speed_threshold = 0.1  # rad/s
+        self.acceleration_threshold = 0.5  # rad/s^2
+        self.jerk_threshold = 1.0  # rad/s^3
+        
+        # Smoothing factors
+        self.position_smoothing = 0.7  # For position-based smoothing
+        self.velocity_smoothing = 0.8  # For velocity-based smoothing
+        self.acceleration_smoothing = 0.9  # For acceleration-based smoothing
+        
+        # Initialize motion history buffers
+        self.position_history = {joint: [] for joint in self.joint_angles.keys()}
+        self.velocity_history = {joint: [] for joint in self.joint_angles.keys()}
+        self.acceleration_history = {joint: [] for joint in self.joint_angles.keys()}
+
+        # --- begin jerk‐filter additions ---
+        # maximum joint velocity (rad/s) you allow
+        self.max_joint_velocity = 2.0
+        # convert to max angular change per record_frame call
+        self.max_angle_step = self.max_joint_velocity/self.recording_freq
+        # keep track of last written angles so we can clamp changes
+        self.last_recorded_angles = self.joint_angles.copy()
+        # --- end jerk‐filter additions ---
+
     def start_recording(self, filename="robot_motion.csv"):
         """Start recording robot motion to CSV file."""
         print(f"[TRACE] Started recording to {filename}")
@@ -137,25 +167,46 @@ class RobotRetargeter:
         
         if self.frame_counter == 0 or (time.time() - self.start_time) >= self.frame_counter * (1.0 / self.recording_freq):
 
-            # Get current target position and orientation
-            target_position = self.robot_joints["right_wrist"]
-            target_orientation = None  # Can be added if needed
+            # Get current target position and orientation (convert to shoulder-local coords)
+            shoulder_pos = self.robot_joints["right_shoulder"]
+            elbow_pos = self.robot_joints["right_elbow"]
+            wrist_pos = self.robot_joints["right_wrist"]
             
             try:
+                # Convert wrist position to shoulder-local frame
+                target_pos_local = np.array([
+                    wrist_pos[0] - shoulder_pos[0],  # X: forward
+                    wrist_pos[1] - shoulder_pos[1],  # Y: left
+                    wrist_pos[2] - shoulder_pos[2]   # Z: up
+                ])
+
                 # Validate IK solution but don't block recording
                 is_valid, position_error = self.analytical_solver.validate_ik_fk(
-                    self.joint_angles, target_position, target_orientation
+                    self.joint_angles, 
+                    target_pos_local,  # Target position in shoulder frame
+                    None  # No orientation target for now
                 )
                 
                 if not is_valid:
                     print(f"[WARNING] IK validation error {position_error:.6f}")
+
+                # --- begin jerk smoothing ---
+                for j, angle in self.joint_angles.items():
+                    prev = self.last_recorded_angles.get(j, angle)
+                    delta = angle - prev
+                    if abs(delta) > self.max_angle_step:
+                        # clamp to max step in the same direction
+                        angle = prev + math.copysign(self.max_angle_step, delta)
+                        self.joint_angles[j] = angle
+                # remember for next frame
+                self.last_recorded_angles = self.joint_angles.copy()
+                # --- end jerk smoothing ---
 
                 # Compute timestamp from frame index and frequency
                 timestamp = round(self.frame_counter * (1.0 / self.recording_freq), 3)
 
                 print(f"[RECORDING] Frame {self.frame_counter}, angles: {list(self.joint_angles.values())[:3]}...")
 
-                timestamp = self.frame_counter * (1.0 / self.recording_freq)
                 # Create row with timestamp and joint angles
                 row = [f"{timestamp:.3f}"]
                 for joint in self.joint_angles.keys():
@@ -229,49 +280,49 @@ class RobotRetargeter:
         return positions
 
     def retarget_pose(self, human_landmarks, rotation_angle=0):
-        """Retarget human pose to robot."""
-        if not human_landmarks:
-            print("[ERROR] No human landmarks provided to retarget_pose.")
-            return
+        """Retarget human pose to robot dimensions."""
+        try:
+            # Process right arm
+            try:
+                shoulder = human_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+                elbow = human_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_ELBOW]
+                wrist = human_landmarks.landmark[self.mp_pose.PoseLandmark.RIGHT_WRIST]
+                self._process_arm_landmarks(shoulder, elbow, wrist, "right")
+            except Exception as e:
+                print(f"[ERROR] Missing right arm landmarks: {e}")
+                return
 
-        # Get landmarks
-        landmarks = human_landmarks.landmark
-        self.robot_joints["torso"] = np.array([0, 0, 0])
-        scale = 0.3  # Scale factor to adjust for robot size
-        for side in ["left", "right"]:
-            if side == "left":
-                try:
-                    shoulder = landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
-                    elbow = landmarks[mp.solutions.pose.PoseLandmark.LEFT_ELBOW.value]
-                    wrist = landmarks[mp.solutions.pose.PoseLandmark.LEFT_WRIST.value]
-                except Exception as e:
-                    print(f"[ERROR] Missing left arm landmarks: {e}")
-                    continue
-            else:
-                try:
-                    shoulder = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
-                    elbow = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_ELBOW.value]
-                    wrist = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_WRIST.value]
-                except Exception as e:
-                    print(f"[ERROR] Missing right arm landmarks: {e}")
-                    continue
-            sign = -1 if side == "left" else 1
-            self.robot_joints[f"{side}_shoulder"] = np.array([
-                sign * shoulder.x * scale,
-                -shoulder.z * scale,
-                -shoulder.y * scale
-            ])
-            self.robot_joints[f"{side}_elbow"] = np.array([
-                sign * elbow.x * scale,
-                -elbow.z * scale,
-                -elbow.y * scale
-            ])
-            self.robot_joints[f"{side}_wrist"] = np.array([
-                sign * wrist.x * scale,
-                -wrist.z * scale,
-                -wrist.y * scale
-            ])
-        self.scale_to_robot_dimensions()
+            # Process left arm
+            try:
+                shoulder = human_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+                elbow = human_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_ELBOW]
+                wrist = human_landmarks.landmark[self.mp_pose.PoseLandmark.LEFT_WRIST]
+                self._process_arm_landmarks(shoulder, elbow, wrist, "left")
+            except Exception as e:
+                print(f"[ERROR] Missing left arm landmarks: {e}")
+                return
+
+        except Exception as e:
+            print(f"[ERROR] Failed to retarget pose: {e}")
+
+    def _process_arm_landmarks(self, shoulder, elbow, wrist, side):
+        """Process arm landmarks and update robot joint positions."""
+        # Map MediaPipe (x:right, y:up, z:forward) → robot (X:forward, Y:left, Z:up)
+        self.robot_joints[f"{side}_shoulder"] = np.array([
+            -shoulder.z * self.scale,    # forward
+            -shoulder.x * self.scale,    # left
+             shoulder.y * self.scale     # up
+        ])
+        self.robot_joints[f"{side}_elbow"] = np.array([
+            -elbow.z * self.scale,
+            -elbow.x * self.scale,
+             elbow.y * self.scale
+        ])
+        self.robot_joints[f"{side}_wrist"] = np.array([
+            -wrist.z * self.scale,
+            -wrist.x * self.scale,
+             wrist.y * self.scale
+        ])
         try:
             left_angles = self.calculate_joint_angles("left")
             right_angles = self.calculate_joint_angles("right")
@@ -308,7 +359,16 @@ class RobotRetargeter:
             elbow = self.robot_joints[f"{side}_elbow"]
             wrist = self.robot_joints[f"{side}_wrist"]
             
-            angles = self.analytical_solver.solve(shoulder, elbow, wrist)
+            # Convert to shoulder-local coordinates
+            local_elbow = elbow - shoulder
+            local_wrist = wrist - shoulder
+            
+            angles = self.analytical_solver.solve(
+                shoulder,  # Base position
+                elbow,     # Elbow position
+                wrist,     # Wrist position
+                None       # No orientation target for now
+            )
             
             # Standardize output keys to *_joint
             angles_3d = {
@@ -408,7 +468,7 @@ class RobotRetargeter:
                 self.joint_angles[joint] = raw_angle
                 self.joint_angle_history[joint].append(raw_angle)
         
-            self.previous_joint_angles = self.safe_copy(self.joint_angles)
+        self.previous_joint_angles = self.safe_copy(self.joint_angles)
 
     def apply_limit(self, angle, joint_type, side=None):
         limits = self.joint_limits.get(joint_type)
@@ -614,3 +674,168 @@ class RobotRetargeter:
     @staticmethod
     def safe_copy(d):
         return d.copy() if d is not None else {}
+
+    def smooth_motion(self, raw_angles):
+        """Apply comprehensive motion smoothing using multiple techniques."""
+        smoothed_angles = {}
+        
+        for joint, raw_angle in raw_angles.items():
+            # Get current history
+            positions = self.position_history[joint]
+            velocities = self.velocity_history[joint]
+            accelerations = self.acceleration_history[joint]
+            
+            # Calculate current velocity and acceleration
+            current_velocity = 0
+            current_acceleration = 0
+            
+            if len(positions) > 0:
+                current_velocity = (raw_angle - positions[-1]) / self.time_step
+                if len(velocities) > 0:
+                    current_acceleration = (current_velocity - velocities[-1]) / self.time_step
+            
+            # Update history
+            positions.append(raw_angle)
+            velocities.append(current_velocity)
+            accelerations.append(current_acceleration)
+            
+            # Maintain window sizes
+            if len(positions) > self.smoothing_window:
+                positions.pop(0)
+            if len(velocities) > self.velocity_window:
+                velocities.pop(0)
+            if len(accelerations) > self.acceleration_window:
+                accelerations.pop(0)
+            
+            # Apply multiple smoothing techniques
+            # 1. Position-based smoothing (moving average)
+            position_smoothed = np.mean(positions)
+            
+            # 2. Velocity-based smoothing
+            if len(velocities) > 0:
+                velocity_smoothed = np.mean(velocities)
+                # Apply velocity limits
+                joint_type = joint.split('_')[1]
+                if joint_type in self.joint_velocity_limits:
+                    max_velocity = self.joint_velocity_limits[joint_type]
+                    velocity_smoothed = np.clip(velocity_smoothed, -max_velocity, max_velocity)
+            else:
+                velocity_smoothed = 0
+            
+            # 3. Acceleration-based smoothing
+            if len(accelerations) > 0:
+                acceleration_smoothed = np.mean(accelerations)
+                # Apply acceleration limits
+                acceleration_smoothed = np.clip(acceleration_smoothed, 
+                                             -self.acceleration_threshold, 
+                                             self.acceleration_threshold)
+            else:
+                acceleration_smoothed = 0
+            
+            # Combine smoothed values with weighted averaging
+            smoothed_angle = (
+                position_smoothed * self.position_smoothing +
+                (positions[-1] + velocity_smoothed * self.time_step) * (1 - self.position_smoothing)
+            )
+            
+            # Apply acceleration smoothing
+            smoothed_angle = (
+                smoothed_angle * self.acceleration_smoothing +
+                (positions[-1] + velocity_smoothed * self.time_step + 
+                 0.5 * acceleration_smoothed * self.time_step**2) * (1 - self.acceleration_smoothing)
+            )
+            
+            # Apply joint limits with smooth transitions
+            smoothed_angle = self.apply_smooth_limit(smoothed_angle, joint.split('_')[1], joint.split('_')[0])
+            
+            smoothed_angles[joint] = smoothed_angle
+        
+        return smoothed_angles
+
+    def predict_motion(self, current_angles, prediction_steps=3):
+        """Predict future motion to anticipate and smooth movements."""
+        predicted_angles = {}
+        
+        for joint, current_angle in current_angles.items():
+            # Get motion history
+            positions = self.position_history[joint]
+            velocities = self.velocity_history[joint]
+            accelerations = self.acceleration_history[joint]
+            
+            if len(positions) < 2:
+                predicted_angles[joint] = current_angle
+                continue
+            
+            # Calculate current motion parameters
+            current_velocity = velocities[-1] if velocities else 0
+            current_acceleration = accelerations[-1] if accelerations else 0
+            
+            # Predict future position using constant acceleration model
+            predicted_position = current_angle
+            predicted_velocity = current_velocity
+            predicted_acceleration = current_acceleration
+            
+            # Apply motion constraints
+            joint_type = joint.split('_')[1]
+            if joint_type in self.joint_velocity_limits:
+                max_velocity = self.joint_velocity_limits[joint_type]
+                predicted_velocity = np.clip(predicted_velocity, -max_velocity, max_velocity)
+            
+            predicted_acceleration = np.clip(predicted_acceleration, 
+                                          -self.acceleration_threshold, 
+                                          self.acceleration_threshold)
+            
+            # Calculate predicted position
+            predicted_position = (
+                current_angle + 
+                predicted_velocity * self.time_step + 
+                0.5 * predicted_acceleration * self.time_step**2
+            )
+            
+            # Apply smooth joint limits
+            predicted_position = self.apply_smooth_limit(
+                predicted_position, 
+                joint.split('_')[1], 
+                joint.split('_')[0]
+            )
+            
+            predicted_angles[joint] = predicted_position
+        
+        return predicted_angles
+
+    def update_robot_state(self, results):
+        """Update robot state with motion smoothing and prediction."""
+        if not results.pose_world_landmarks:
+            print("No pose landmarks detected - skipping update")
+            return
+
+        try:
+            # Retarget pose and calculate joint angles
+            print("Updating robot state with new pose")
+            self.retarget_pose(results.pose_world_landmarks, self.current_rotation_angle)
+            
+            # Get raw joint angles
+            raw_angles = {
+                **self.calculate_joint_angles("left"),
+                **self.calculate_joint_angles("right")
+            }
+            
+            # Apply motion smoothing
+            smoothed_angles = self.smooth_motion(raw_angles)
+            
+            # Predict future motion
+            predicted_angles = self.predict_motion(smoothed_angles)
+            
+            # Update joint angles with smoothed and predicted values
+            self.joint_angles.update(predicted_angles)
+            self.robot_joints.update(self.safe_copy(self.robot_joints))
+
+            # Record frame if recording is active
+            self.record_frame()
+
+        except Exception as e:
+            print(f"[ERROR] Failed to update robot state: {str(e)}")
+            # Continue with visualization even if update fails
+
+        # Update visualization
+        self.update_visualization_positions()
