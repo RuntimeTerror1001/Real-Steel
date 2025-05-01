@@ -44,7 +44,7 @@ class PoseMirrorWithRetargeting:
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         
         # Initialize the new retargeter
-        self.retargeter = Retargeter()
+        self.retargeter = Retargeter(10)
         
         # Recording settings
         self.is_recording = False
@@ -65,6 +65,16 @@ class PoseMirrorWithRetargeting:
             "green": (0, 255, 0),
             "blue": (0, 0, 255)
         }
+
+        # for calibration
+        self.calibrating = False
+        self.calib_request_t = 0
+        self.calib_delay_ms = 5000
+
+        # for recording
+        self.recording_requested   = False
+        self.record_request_t      = 0
+        self.record_delay_ms       = 5000  # ms
         
     def start_recording(self, filename=None):
         """Start recording joint angles to CSV file."""
@@ -83,10 +93,10 @@ class PoseMirrorWithRetargeting:
         # Write CSV header
         header = ["timestamp"]
         ordered_joints = [
-            "left_shoulder_pitch_joint", "left_shoulder_yaw_joint", "left_shoulder_roll_joint",
-            "left_elbow_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", "left_wrist_roll_joint",
-            "right_shoulder_pitch_joint", "right_shoulder_yaw_joint", "right_shoulder_roll_joint",
-            "right_elbow_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint", "right_wrist_roll_joint"
+            "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+            "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+            "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+            "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint"
         ]
         header.extend(ordered_joints)
         self.csv_writer.writerow(header)
@@ -298,6 +308,39 @@ class PoseMirrorWithRetargeting:
                     cmd_text = self.small_font.render(cmd, True, self.colors["white"])
                     self.screen.blit(cmd_text, (10, self.window_size[1] - 110 + i*25))
                 
+                # ——— non‐blocking calibration countdown ———
+                now = pygame.time.get_ticks()
+                if self.calibrating:
+                    elapsed = now - self.calib_request_t
+                    remaining_s = max(0, (self.calib_delay_ms - elapsed)//1000 + 1)
+                    # draw it on screen
+                    txt = self.small_font.render(f"Calibrating in {remaining_s}s", True, self.colors["red"])
+                    self.screen.blit(txt, (10, 90))
+                    if elapsed >= self.calib_delay_ms:
+                        # fire!
+                        print("\nRunning calibration now…")
+                        self.retargeter.calibrate(results.pose_world_landmarks.landmark)
+                        self.retargeter.prev_angles = {}
+                        self.calibrating = False
+
+                # ——— non‐blocking recording countdown ———
+                if self.recording_requested:
+                    elapsed = now - self.record_request_t
+                    remaining_s = max(0, (self.record_delay_ms - elapsed)//1000 + 1)
+                    txt = self.small_font.render(
+                        ("Stopping" if self.is_recording else "Starting") +
+                        f" recording in {remaining_s}s", 
+                        True, self.colors["blue"]
+                    )
+                    self.screen.blit(txt, (10, 130))
+                    if elapsed >= self.record_delay_ms:
+                        # toggle now
+                        if self.is_recording:
+                            self.stop_recording()
+                        else:
+                            self.start_recording()
+                        self.recording_requested = False
+
                 pygame.display.flip()
             
             # Handle events
@@ -309,17 +352,14 @@ class PoseMirrorWithRetargeting:
                         # Calibrate
                         if results.pose_world_landmarks:
                             print("Calibrating...")
-                            pygame.time.delay(5000)
-                            self.retargeter.calibrate(results.pose_world_landmarks.landmark)
-                            self.retargeter.prev_angles = {}
-                            print("Calibration complete!")
+                            print("Calibration requested — hold still for 5 s")
+                            self.calibrating     = True
+                            self.calib_request_t = pygame.time.get_ticks()
                     elif event.key == pygame.K_r:
                         # Toggle recording
-                        if self.is_recording:
-                            self.stop_recording()
-                        else:
-                            pygame.time.delay(5000)
-                            self.start_recording()
+                        print("Recording requested - hold pose for 5 s")
+                        self.recording_requested = True
+                        self.record_request_t = pygame.time.get_ticks()
                     elif event.key == pygame.K_q:
                         running = False
                     # View control keys

@@ -1,7 +1,9 @@
 import numpy as np
 import mediapipe as mp
+from scipy.spatial.transform import Rotation as R
 
 class RobotModel:
+    _ref = np.array([0, -1, 0])  # “down” in robot coords
     def __init__(self):
         """Initialize the Unitree G1 robot model with correct specifications from MuJoCo XML."""
         
@@ -109,6 +111,71 @@ class RobotModel:
         }
         return robot_coords
     
+    def shoulder_angles(self, u, f, is_left=True):
+        """
+        u: unit upper-arm vector (shoulder→elbow)
+        f: unit forearm vector  (elbow→wrist)
+        is_left: True for left arm, False for right
+        returns: (roll, pitch, yaw) with your sign conventions
+        """
+        # 1) swing: rotate “down” → u
+        axis  = np.cross(self._ref, u)
+        angle = np.arccos(np.clip(np.dot(self._ref, u), -1.0, 1.0))
+        if np.linalg.norm(axis) < 1e-6:
+            # nearly aligned; pick any perpendicular axis
+            axis = np.array([1,0,0])
+        else:
+            axis = axis / np.linalg.norm(axis)
+        q_swing = R.from_rotvec(axis * angle)
+
+        # 2) twist: rotate around u by the dynamic yaw you already compute
+        def compute_yaw(u, f):
+            """
+            u: unit vector along upper arm
+            f: unit vector along forearm
+            returns: signed twist angle around u (radians)
+            """
+            # 1) pick a stable “not‐parallel” axis
+            arb = np.array([0, 0, 1])
+            if abs(np.dot(u, arb)) > 0.9:
+                arb = np.array([0, 1, 0])
+
+            # 2) Gram–Schmidt to get two perpendicular basis vectors in plane ⟂ u
+            v = arb - u * np.dot(arb, u)
+            v /= np.linalg.norm(v)
+            w = np.cross(u, v)
+
+            # 3) project forearm vector onto that plane and measure angle
+            x = np.dot(f, v)
+            y = np.dot(f, w)
+            return np.arctan2(y, x)
+        
+        raw_yaw = compute_yaw(u, f)
+        # for right arm we'll flip sign later
+        q_twist = R.from_rotvec(u * raw_yaw)
+
+        # 3) combined orientation
+        q_total = q_twist * q_swing
+        # test = q_total.apply(self._ref)
+        # print("swinged+twisted 'down' →", test, "should equal u:", u)
+
+        # 4) intrinsic Y-X-Z decomposition
+        #    (i.e. R = R_y(roll) · R_x(pitch) · R_z(yaw))
+        pitch, roll, yaw = q_total.as_euler('xyz', degrees=False)
+        # print("raw Euler X,Y,Z:", pitch, roll, yaw)
+
+        # 5) apply your sign rules             # raising arm should decrease pitch
+        if is_left:
+            pitch = +pitch
+            roll = +roll           # positive when moving left
+            yaw  = -yaw            # positive for palm forward
+        else:
+            pitch = -pitch
+            roll = -roll           # negative when moving right
+            yaw  = +yaw            # negative for palm forward
+
+        return roll, pitch, yaw
+    
     def rotation_matrix_x(self, angle):
         """Return 3x3 rotation matrix around X axis."""
         c, s = np.cos(angle), np.sin(angle)
@@ -156,35 +223,6 @@ class RobotModel:
         yaw   = np.arctan2( R[1,0],  R[0,0] )
 
         return roll, pitch, yaw
-    
-    def compute_euler_yxz(self, R, eps=1e-6):
-        """
-        Given R = R_z(yaw) @ R_x(roll) @ R_y(pitch),
-        extract intrinsic Y–X–Z angles (pitch, roll, yaw),
-        with a gimbal-lock fallback.
-        """
-
-        # 1) roll = β = arcsin(R[2,1])
-        sin_roll = np.clip(R[2, 1], -1.0, 1.0)
-        roll     = np.arcsin(sin_roll)
-
-        # 2) compute cos(β) to check for gimbal lock
-        cos_roll = np.sqrt(1 - sin_roll*sin_roll)
-
-        if cos_roll < eps:
-            # --- GIMBAL-LOCK PATH ---
-            # roll ≈ ±90°, so R[2,1]=±1 and rows/cols collapse.
-            # We lose one DOF; pick yaw = 0 and compute pitch from R[1,0]/R[0,0].
-            yaw   = 0.0
-            pitch = np.arctan2(R[1, 0], R[0, 0])
-        else:
-            # --- NORMAL PATH ---
-            # pitch = α from the X–Z submatrix
-            pitch = np.arctan2(-R[2, 0], R[2, 2])
-            # yaw   = γ from the top-left 2×2
-            yaw   = np.arctan2(-R[0, 1], R[1, 1])
-
-        return pitch, roll, yaw
     
     def forward_kinematics(self, joint_angles):
         """
@@ -296,166 +334,130 @@ class RobotModel:
         positions["right_wrist"] = r_wrist_pos
         
         return positions
-    
+        
     def inverse_kinematics(self, landmarks):
-        """Complete revision of the inverse kinematics algorithm."""
+        """
+        Inverse kinematics for both arms:
+        - elbow via simple dot‐product angle
+        - shoulder roll/pitch/yaw via quaternion→Euler (YXZ) decomposition
+        - wrist via existing compute_wrist_angles
+        """
+
         joint_angles = {}
         mp_pose = mp.solutions.pose.PoseLandmark
-        
-        # Transform landmarks with correct mirroring
-        l_shoulder = self.transform_to_robot_coords(landmarks[mp_pose.LEFT_SHOULDER.value])
-        l_elbow = self.transform_to_robot_coords(landmarks[mp_pose.LEFT_ELBOW.value])
-        l_wrist = self.transform_to_robot_coords(landmarks[mp_pose.LEFT_WRIST.value])
-        
-        r_shoulder = self.transform_to_robot_coords(landmarks[mp_pose.RIGHT_SHOULDER.value])
-        r_elbow = self.transform_to_robot_coords(landmarks[mp_pose.RIGHT_ELBOW.value])
-        r_wrist = self.transform_to_robot_coords(landmarks[mp_pose.RIGHT_WRIST.value])
-        
-        # Convert to numpy arrays
-        l_shoulder_pos = np.array([l_shoulder['x'], l_shoulder['y'], l_shoulder['z']])
-        l_elbow_pos = np.array([l_elbow['x'], l_elbow['y'], l_elbow['z']])
-        l_wrist_pos = np.array([l_wrist['x'], l_wrist['y'], l_wrist['z']])
-        
-        r_shoulder_pos = np.array([r_shoulder['x'], r_shoulder['y'], r_shoulder['z']])
-        r_elbow_pos = np.array([r_elbow['x'], r_elbow['y'], r_elbow['z']])
-        r_wrist_pos = np.array([r_wrist['x'], r_wrist['y'], r_wrist['z']])
-        
-        # Calculate vectors and normalize
-        l_upper_arm_vec = l_elbow_pos - l_shoulder_pos
-        l_forearm_vec = l_wrist_pos - l_elbow_pos
-        
-        r_upper_arm_vec = r_elbow_pos - r_shoulder_pos
-        r_forearm_vec = r_wrist_pos - r_elbow_pos
-        
-        # Normalize vectors
-        l_upper_arm_len = np.linalg.norm(l_upper_arm_vec)
-        l_forearm_len = np.linalg.norm(l_forearm_vec)
-        l_upper_arm_norm = l_upper_arm_vec / l_upper_arm_len if l_upper_arm_len > 0 else np.array([0, -1, 0])
-        l_forearm_norm = l_forearm_vec / l_forearm_len if l_forearm_len > 0 else np.array([0, -1, 0])
-        
-        r_upper_arm_len = np.linalg.norm(r_upper_arm_vec)
-        r_forearm_len = np.linalg.norm(r_forearm_vec)
-        r_upper_arm_norm = r_upper_arm_vec / r_upper_arm_len if r_upper_arm_len > 0 else np.array([0, -1, 0])
-        r_forearm_norm = r_forearm_vec / r_forearm_len if r_forearm_len > 0 else np.array([0, -1, 0])
-        
-        # ===== LEFT ARM =====
-        
-        # 1. Elbow angle - simple angle between arm segments
-        l_elbow_angle = np.arccos(np.clip(np.dot(l_upper_arm_norm, l_forearm_norm), -1.0, 1.0))
-        joint_angles["left_elbow_joint"] = -l_elbow_angle
-        
-        # 2. Shoulder pitch (Y-axis rotation) - project onto Y-Z plane
-        # Angle from +Z axis (downward) in the Y-Z plane
-        y_z_proj = np.array([0, l_upper_arm_norm[1], l_upper_arm_norm[2]])
-        y_z_len = np.linalg.norm(y_z_proj)
-        if y_z_len > 0.01:
-            y_z_proj /= y_z_len
-            # For shoulders, negative is arm up
-            l_shoulder_pitch = - np.arctan2(y_z_proj[1], y_z_proj[2])
-        else:
-            # Handle the case where arm is pointing along X axis
-            l_shoulder_pitch = 0.0
-        
-        # 3. Shoulder roll (X-axis rotation)
-        # After applying pitch, calculate roll as deviation from Y-Z plane
-        # Zero is arm in the Y-Z plane, positive roll moves arm outward
-        x_proj = l_upper_arm_norm[0]
-        l_shoulder_roll = np.arcsin(np.clip(x_proj, -1.0, 1.0))
-        
-        # 4. Shoulder yaw (Z-axis rotation)
-        x_z_proj = np.array([l_upper_arm_norm[0], l_upper_arm_norm[2]])
-        x_z_len = np.linalg.norm(x_z_proj)
-        if x_z_len > 0.01:
-            x_z_proj /= x_z_len
-            #positive when swings rightward, negative leftward
-            l_shoulder_yaw = np.arctan2(x_z_proj[0], x_z_proj[1])
-        else:
-            l_shoulder_yaw = 0.0
 
-        R_ly = self.rotation_matrix_y(l_shoulder_pitch)
-        R_lx = self.rotation_matrix_x(l_shoulder_roll)
-        R_lz = self.rotation_matrix_z(l_shoulder_yaw)
-        R_lshoulder = R_lz @ R_lx @ R_ly
+        # --- 1) get 3D positions in robot coords ---
+        def to_np(lm_idx):
+            lm = self.transform_to_robot_coords(landmarks[lm_idx.value])
+            return np.array([lm['x'], lm['y'], lm['z']])
 
-        l_spitch, l_sroll, l_syaw = self.compute_euler_yxz(R_lshoulder)
-        
-        # Assign angles
-        joint_angles["left_shoulder_pitch_joint"] = l_spitch
-        joint_angles["left_shoulder_roll_joint"] = l_sroll
-        joint_angles["left_shoulder_yaw_joint"] = l_syaw
-        
-        # ===== RIGHT ARM =====
-        
-        # 1. Elbow angle
-        r_elbow_angle = np.arccos(np.clip(np.dot(r_upper_arm_norm, r_forearm_norm), -1.0, 1.0))
-        joint_angles["right_elbow_joint"] = -r_elbow_angle
-        
-        # 2. Shoulder pitch
-        y_z_proj = np.array([0, r_upper_arm_norm[1], r_upper_arm_norm[2]])
-        y_z_len = np.linalg.norm(y_z_proj)
-        if y_z_len > 0.01:
-            y_z_proj /= y_z_len
-            r_shoulder_pitch = - np.arctan2(y_z_proj[1], y_z_proj[2])
-        else:
-            r_shoulder_pitch = 0.0
-        
-        # 3. Shoulder roll - note sign change for right arm
-        x_proj = r_upper_arm_norm[0]
-        r_shoulder_roll = np.arcsin(np.clip(x_proj, -1.0, 1.0))  # Negative for right arm
-        
-        # 4. Shoulder yaw
-        x_z_proj = np.array([r_upper_arm_norm[0], r_upper_arm_norm[2]])
-        x_z_len = np.linalg.norm(x_z_proj)
-        if x_z_len > 0.01:
-            x_z_proj /= x_z_len
-            r_shoulder_yaw = -np.arctan2(x_z_proj[0], x_z_proj[1])
-        else:
-            r_shoulder_yaw = 0.0
+        l_sh = to_np(mp_pose.LEFT_SHOULDER)
+        l_el = to_np(mp_pose.LEFT_ELBOW)
+        l_wr = to_np(mp_pose.LEFT_WRIST)
+        r_sh = to_np(mp_pose.RIGHT_SHOULDER)
+        r_el = to_np(mp_pose.RIGHT_ELBOW)
+        r_wr = to_np(mp_pose.RIGHT_WRIST)
 
-        R_ry = self.rotation_matrix_y(r_shoulder_pitch)
-        R_rx = self.rotation_matrix_x(r_shoulder_roll)
-        R_rz = self.rotation_matrix_z(r_shoulder_yaw)
-        R_rshoulder = R_rz @ R_rx @ R_ry
+        # --- 2) compute unit upper-arm & forearm vectors ---
+        def unit(a, b):
+            v = b - a
+            n = np.linalg.norm(v)
+            return (v / n) if n > 1e-6 else np.array([0, -1, 0])
 
-        r_spitch, r_sroll, r_syaw = self.compute_euler_yxz(R_rshoulder)
-        
-        # Assign angles
-        joint_angles["right_shoulder_pitch_joint"] = r_spitch
-        joint_angles["right_shoulder_roll_joint"] = r_sroll
-        joint_angles["right_shoulder_yaw_joint"] = r_syaw
-        
-        # Wrist angles 
-        l_palm_norm = np.cross(l_upper_arm_norm, l_forearm_norm)
-        l_palm_norm /= np.linalg.norm(l_palm_norm)
-        prev = self.prev_palm_normal['left']
-        if prev is not None and np.dot(prev, l_palm_norm) < 0:
-            l_palm_norm = - l_palm_norm
-        self.prev_palm_normal['left'] = l_palm_norm
+        l_u = unit(l_sh, l_el)
+        l_f = unit(l_el, l_wr)
+        r_u = unit(r_sh, r_el)
+        r_f = unit(r_el, r_wr)
 
-        r_palm_norm = np.cross(r_upper_arm_norm, r_forearm_norm)
-        r_palm_norm /= np.linalg.norm(r_palm_norm)
-        prev = self.prev_palm_normal['right']
-        if prev is not None and np.dot(prev, r_palm_norm) < 0:
-            r_palm_norm = - r_palm_norm
-        self.prev_palm_normal['right'] = r_palm_norm
+        # --- 3) helper to compute dynamic twist (yaw) around u ---
+        def compute_yaw(u, f):
+            """
+            u: unit vector along upper arm
+            f: unit vector along forearm
+            returns: signed twist angle around u (radians)
+            """
+            # 1) pick a stable “not‐parallel” axis
+            arb = np.array([0, 0, 1])
+            if abs(np.dot(u, arb)) > 0.9:
+                arb = np.array([0, 1, 0])
 
-        l_wr, l_wp, l_wy = self.compute_wrist_angles(l_forearm_norm, l_palm_norm)
-        joint_angles["left_wrist_roll_joint"] = 0
+            # 2) Gram–Schmidt to get two perpendicular basis vectors in plane ⟂ u
+            v = arb - u * np.dot(arb, u)
+            v /= np.linalg.norm(v)
+            w = np.cross(u, v)
+
+            # 3) project forearm vector onto that plane and measure angle
+            x = np.dot(f, v)
+            y = np.dot(f, w)
+            return np.arctan2(y, x)
+
+        # --- LEFT ARM ---
+        # 1) elbow
+        l_elbow_ang = np.arccos(np.clip(np.dot(l_u, l_f), -1.0, 1.0))
+        joint_angles["left_elbow_joint"] = -l_elbow_ang
+
+        l_s_roll, l_s_pitch, l_s_yaw = self.shoulder_angles(l_u, l_f)
+
+        # 2) roll (swing left/right) about Y (vertical)
+        l_roll = np.arctan2(l_u[0], -l_u[1])
+
+        # 3) pitch (forward/back) about X (horizontal)
+        l_pitch = -np.arctan2(l_u[2], -l_u[1])
+
+        # 4) yaw (true twist around upper-arm axis)
+        l_yaw = compute_yaw(l_u, l_f)
+
+        joint_angles["left_shoulder_roll_joint"]  = l_s_roll
+        joint_angles["left_shoulder_pitch_joint"] = l_s_pitch
+        joint_angles["left_shoulder_yaw_joint"]   = l_s_yaw
+
+        # --- RIGHT ARM ---
+        r_elbow_ang = np.arccos(np.clip(np.dot(r_u, r_f), -1.0, 1.0))
+        joint_angles["right_elbow_joint"] = -r_elbow_ang
+
+        r_s_roll, r_s_pitch, r_s_yaw = self.shoulder_angles(r_u,r_f,is_left=False)
+
+        r_roll = np.arctan2(r_u[0], -r_u[1])
+        r_pitch = -np.arctan2(r_u[2], -r_u[1])
+        r_yaw = compute_yaw(r_u, r_f)
+
+        joint_angles["right_shoulder_roll_joint"]  = r_roll
+        joint_angles["right_shoulder_pitch_joint"] = r_pitch
+        joint_angles["right_shoulder_yaw_joint"]   = r_yaw
+
+        # --- WRIST ANGLES (unchanged) ---
+        def palm_norm(u, f, prev):
+            pn = np.cross(u, f)
+            norm = np.linalg.norm(pn)
+            if norm > 1e-6:
+                pn /= norm
+            if prev is not None and np.dot(prev, pn) < 0:
+                pn = -pn
+            return pn
+
+        l_pn = palm_norm(l_u, l_f, self.prev_palm_normal['left'])
+        self.prev_palm_normal['left'] = l_pn
+        r_pn = palm_norm(r_u, r_f, self.prev_palm_normal['right'])
+        self.prev_palm_normal['right'] = r_pn
+
+        l_wr, l_wp, l_wy = self.compute_wrist_angles(l_f, l_pn)
+        r_wr, r_wp, r_wy = self.compute_wrist_angles(r_f, r_pn)
+
+        joint_angles["left_wrist_roll_joint"]  = 0
         joint_angles["left_wrist_pitch_joint"] = 0
-        joint_angles["left_wrist_yaw_joint"] = 0
-
-        r_wr, r_wp, r_wy = self.compute_wrist_angles(r_forearm_norm, r_palm_norm)
-        joint_angles["right_wrist_roll_joint"] = 0
+        joint_angles["left_wrist_yaw_joint"]   = 0
+        joint_angles["right_wrist_roll_joint"]  = 0
         joint_angles["right_wrist_pitch_joint"] = 0
-        joint_angles["right_wrist_yaw_joint"] = 0
-        
-        # Apply joint limits
-        for joint, angle in joint_angles.items():
+        joint_angles["right_wrist_yaw_joint"]   = 0
+
+        # --- 4) apply joint limits ---
+        for joint, ang in joint_angles.items():
             if joint in self.joint_limits:
-                min_limit, max_limit = self.joint_limits[joint]
-                joint_angles[joint] = np.clip(angle, min_limit, max_limit)
-        
+                mn, mx = self.joint_limits[joint]
+                joint_angles[joint] = np.clip(ang, mn, mx)
+
         return joint_angles
+        
     
     def calibrate(self, landmarks):
         """
@@ -497,3 +499,110 @@ class RobotModel:
                 calibrated[joint] = angle
                 
         return calibrated
+    
+
+"""
+    def inverse_kinematics(self, landmarks):
+    FIRST METHOD - OFF PITCH:
+    joint_angles = {}
+        mp_pose = mp.solutions.pose.PoseLandmark
+
+        # --- 1) get 3D positions in robot coords ---
+        def to_np(lm_idx):
+            lm = self.transform_to_robot_coords(landmarks[lm_idx.value])
+            return np.array([lm['x'], lm['y'], lm['z']])
+
+        l_sh = to_np(mp_pose.LEFT_SHOULDER)
+        l_el = to_np(mp_pose.LEFT_ELBOW)
+        l_wr = to_np(mp_pose.LEFT_WRIST)
+        r_sh = to_np(mp_pose.RIGHT_SHOULDER)
+        r_el = to_np(mp_pose.RIGHT_ELBOW)
+        r_wr = to_np(mp_pose.RIGHT_WRIST)
+
+        # --- 2) compute unit upper-arm & forearm vectors ---
+        def unit(a, b):
+            v = b - a
+            n = np.linalg.norm(v)
+            return (v / n) if n > 1e-6 else np.array([0, -1, 0])
+
+        l_u = unit(l_sh, l_el)
+        l_f = unit(l_el, l_wr)
+        r_u = unit(r_sh, r_el)
+        r_f = unit(r_el, r_wr)
+
+        # --- 3) helper to compute dynamic twist (yaw) around u ---
+        def compute_yaw(u, f):
+            # pick a world axis not too parallel to u
+            world = np.array([1, 0, 0]) if abs(u.dot([1,0,0])) < 0.9 else np.array([0, 0, 1])
+            # project into plane ⟂ u
+            ref = world - u * np.dot(u, world)
+            ref /= np.linalg.norm(ref)
+            proj = f - u * np.dot(f, u)
+            proj /= np.linalg.norm(proj) if np.linalg.norm(proj) > 1e-6 else 1.0
+            cross = np.cross(ref, proj)
+            return -np.arctan2(np.dot(cross, u), np.dot(ref, proj))
+
+        # --- LEFT ARM ---
+        # 1) elbow
+        l_elbow_ang = np.arccos(np.clip(np.dot(l_u, l_f), -1.0, 1.0))
+        joint_angles["left_elbow_joint"] = -l_elbow_ang
+
+        # 2) roll (swing left/right) about Y (vertical)
+        l_roll = np.arctan2(l_u[0], -l_u[1])
+
+        # 3) pitch (forward/back) about X (horizontal)
+        l_pitch = -np.arctan2(l_u[2], -l_u[1])
+
+        # 4) yaw (true twist around upper-arm axis)
+        l_yaw = compute_yaw(l_u, l_f)
+
+        joint_angles["left_shoulder_roll_joint"]  = l_roll
+        joint_angles["left_shoulder_pitch_joint"] = l_pitch
+        joint_angles["left_shoulder_yaw_joint"]   = l_yaw
+
+        # --- RIGHT ARM ---
+        r_elbow_ang = np.arccos(np.clip(np.dot(r_u, r_f), -1.0, 1.0))
+        joint_angles["right_elbow_joint"] = -r_elbow_ang
+
+        r_roll = np.arctan2(r_u[0], -r_u[1])
+        r_pitch = -np.arctan2(r_u[2], -r_u[1])
+        r_yaw = compute_yaw(r_u, r_f)
+
+        joint_angles["right_shoulder_roll_joint"]  = r_roll
+        joint_angles["right_shoulder_pitch_joint"] = r_pitch
+        joint_angles["right_shoulder_yaw_joint"]   = r_yaw
+
+        # --- WRIST ANGLES (unchanged) ---
+        def palm_norm(u, f, prev):
+            pn = np.cross(u, f)
+            norm = np.linalg.norm(pn)
+            if norm > 1e-6:
+                pn /= norm
+            if prev is not None and np.dot(prev, pn) < 0:
+                pn = -pn
+            return pn
+
+        l_pn = palm_norm(l_u, l_f, self.prev_palm_normal['left'])
+        self.prev_palm_normal['left'] = l_pn
+        r_pn = palm_norm(r_u, r_f, self.prev_palm_normal['right'])
+        self.prev_palm_normal['right'] = r_pn
+
+        l_wr, l_wp, l_wy = self.compute_wrist_angles(l_f, l_pn)
+        r_wr, r_wp, r_wy = self.compute_wrist_angles(r_f, r_pn)
+
+        joint_angles["left_wrist_roll_joint"]  = 0
+        joint_angles["left_wrist_pitch_joint"] = 0
+        joint_angles["left_wrist_yaw_joint"]   = 0
+        joint_angles["right_wrist_roll_joint"]  = 0
+        joint_angles["right_wrist_pitch_joint"] = 0
+        joint_angles["right_wrist_yaw_joint"]   = 0
+
+        # --- 4) apply joint limits ---
+        for joint, ang in joint_angles.items():
+            if joint in self.joint_limits:
+                mn, mx = self.joint_limits[joint]
+                joint_angles[joint] = np.clip(ang, mn, mx)
+
+        return joint_angles
+
+"""

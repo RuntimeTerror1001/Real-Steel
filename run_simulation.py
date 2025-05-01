@@ -172,8 +172,8 @@ def run_simulation(model, data, joint_trajectories, joint_mapping, timestamps):
 
 def main():
     # File paths
-    xml_path = "unitree_g1/g1.xml"  # Unitree G1 model
-    csv_path = "test.csv"  # Your recorded motion data
+    xml_path = "unitree_g1/scene_with_hands.xml"  # Unitree G1 model
+    csv_path = "robot_motion_20250501-131533.csv"  # Your recorded motion data
     
     # Check if files exist
     if not os.path.exists(xml_path):
