@@ -7,8 +7,8 @@ import os
 import sys
 from ik_analytical3d import IKAnalytical3DRefined
 import xml.etree.ElementTree as ET
-import ikpy.chain
-import ikpy.utils.plot as ikpy_plot
+# ikpy imports removed - using only analytical and BRPSO solvers
+from brpso_ik_solver import BRPSO_IK_Solver
 
 # Ensure CSV support is available
 try:
@@ -33,8 +33,9 @@ except ImportError:
 
 class RobotRetargeter:
     """Class to handle retargeting human motion to robot figure and recording data."""
-    def __init__(self, robot_type="unitree_g1", recording_freq=10):
+    def __init__(self, robot_type="unitree_g1", recording_freq=10, ik_solver_backend='analytical'):
         """Initialize the RobotRetargeter."""
+        print('[RobotRetargeter] -> __init__()')
         # Robot specifications - Unitree G1 humanoid model
         self.robot_type = robot_type
         self.recording = False
@@ -97,6 +98,10 @@ class RobotRetargeter:
             lower_arm_length=self.dimensions["lower_arm_length"],
             position_tolerance=1e-5,  # Higher tolerance for more stable solutions
             refinement_gain=0.3       # Conservative gain for refinement
+        )
+        self.brpso_solver = BRPSO_IK_Solver(
+            upper_arm_length=self.dimensions["upper_arm_length"],
+            lower_arm_length=self.dimensions["lower_arm_length"]
         )
         
         # IK solver error tracking
@@ -188,9 +193,11 @@ class RobotRetargeter:
         
         # Initialize robot visualization
         self.robot_plot = None
+        self.ik_solver_backend = ik_solver_backend
 
     def clip_angle(self, joint_name, angle):
         """Clip angle to joint limits and track statistics"""
+        print('[RobotRetargeter] -> clip_angle()')
         if joint_name in self.joint_limits:
             min_limit, max_limit = self.joint_limits[joint_name]
             
@@ -205,6 +212,7 @@ class RobotRetargeter:
 
     def start_recording(self, filename=None):
         """Start recording robot motion to CSV file."""
+        print('[RobotRetargeter] -> start_recording()')
         try:
             if filename is None:
                 os.makedirs("recordings", exist_ok=True)
@@ -242,6 +250,7 @@ class RobotRetargeter:
 
     def stop_recording(self):
         """Stop recording and close the file."""
+        print('[RobotRetargeter] -> stop_recording()')
         self.recording = False
         if self.csv_file:
             try:
@@ -255,6 +264,7 @@ class RobotRetargeter:
 
     def record_frame(self):
         """Record current joint angles to CSV with validation."""
+        print('[RobotRetargeter] -> record_frame()')
         if not self.recording or not self.csv_file:
             return
         
@@ -289,6 +299,7 @@ class RobotRetargeter:
 
     def load_joint_limits_from_xml(self, xml_path):
         """Load joint limits from MuJoCo XML file."""
+        print('[RobotRetargeter] -> load_joint_limits_from_xml()')
         try:
             tree = ET.parse(xml_path)
             root = tree.getroot()
@@ -315,6 +326,7 @@ class RobotRetargeter:
 
     def calculate_joint_positions(self):
         """Calculate robot joint positions from human pose landmarks."""
+        print('[RobotRetargeter] -> calculate_joint_positions()')
         positions = {}
         offset_small = 0.02  # Shoulder visualization offset
         offset_tiny = 0.01   # Wrist visualization offset
@@ -358,75 +370,55 @@ class RobotRetargeter:
         # Track total frames for stats
         self.ik_error_tracking['total_frames'] += 1
         
-        # First try analytical IK
         try:
-            # Compute orientation from joint positions
-            # This creates a local coordinate system for the wrist
-            # X axis: from elbow to wrist (forward)
-            x_axis = wrist - elbow
-            x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-8)
-            
-            # Y axis: perpendicular to the plane formed by shoulder, elbow and wrist
-            # (using the cross product of elbow-shoulder and wrist-elbow)
-            v1 = elbow - shoulder
-            v2 = wrist - elbow
-            y_axis = np.cross(v1, v2)
-            y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-8)
-            
-            # Z axis: perpendicular to X and Y (cross product)
-            z_axis = np.cross(x_axis, y_axis)
-            z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-8)
-            
-            # Construct rotation matrix from these three orthogonal axes
-            target_orientation = np.column_stack((x_axis, y_axis, z_axis))
-            
-            # Use refined analytical IK solver with Newton refinement and orientation
-            ik_solution = self.analytical_solver.solve(shoulder, elbow, wrist, target_orientation)
-            
-            # Store the result with proper joint naming
-            new_angles = {
-                f"{prefix}_shoulder_pitch_joint": ik_solution["shoulder_pitch"],
-                f"{prefix}_shoulder_yaw_joint": ik_solution["shoulder_yaw"],
-                f"{prefix}_shoulder_roll_joint": ik_solution["shoulder_roll"],
-                f"{prefix}_elbow_joint": ik_solution["elbow"],
-                f"{prefix}_wrist_pitch_joint": ik_solution["wrist_pitch"],
-                f"{prefix}_wrist_yaw_joint": ik_solution["wrist_yaw"],
-                f"{prefix}_wrist_roll_joint": ik_solution["wrist_roll"]
-            }
-            
-            # Forward kinematics validation for extra security
-            fk_pos, _ = self.analytical_solver.forward_kinematics(ik_solution)
-            target_pos = wrist - shoulder
-            error = np.linalg.norm(fk_pos - target_pos)
-            
-            # Check for error tolerance
-            if error > 1e-2:  # Larger tolerance for practical use
-                print(f"[WARNING] IK-FK validation error: {error:.6f} m")
-                self.ik_error_tracking['analytical_errors'] += 1
-            
-            # Apply the solution to the joint angles
+            if self.ik_solver_backend == 'brpso':
+                # Use BRPSO solver
+                target = wrist - shoulder
+                solution = self.brpso_solver.solve(target_position=target)
+                brpso_angles = solution['joint_angles']
+                new_angles = {
+                    f"{prefix}_shoulder_yaw_joint": brpso_angles['shoulder_yaw'],
+                    f"{prefix}_shoulder_pitch_joint": brpso_angles['shoulder_pitch'],
+                    f"{prefix}_shoulder_roll_joint": brpso_angles['shoulder_roll'],
+                    f"{prefix}_elbow_joint": brpso_angles['elbow'],
+                    f"{prefix}_wrist_pitch_joint": brpso_angles['wrist_pitch'],
+                    f"{prefix}_wrist_yaw_joint": brpso_angles['wrist_yaw'],
+                    f"{prefix}_wrist_roll_joint": brpso_angles['wrist_roll']
+                }
+            else:
+                # Analytical solver
+                x_axis = wrist - elbow
+                x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-8)
+                v1 = elbow - shoulder
+                v2 = wrist - elbow
+                y_axis = np.cross(v1, v2)
+                y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-8)
+                z_axis = np.cross(x_axis, y_axis)
+                z_axis = z_axis / (np.linalg.norm(z_axis) + 1e-8)
+                target_orientation = np.column_stack((x_axis, y_axis, z_axis))
+                ik_solution = self.analytical_solver.solve(shoulder, elbow, wrist, target_orientation)
+                new_angles = {
+                    f"{prefix}_shoulder_pitch_joint": ik_solution["shoulder_pitch"],
+                    f"{prefix}_shoulder_yaw_joint": ik_solution["shoulder_yaw"],
+                    f"{prefix}_shoulder_roll_joint": ik_solution["shoulder_roll"],
+                    f"{prefix}_elbow_joint": ik_solution["elbow"],
+                    f"{prefix}_wrist_pitch_joint": ik_solution["wrist_pitch"],
+                    f"{prefix}_wrist_yaw_joint": ik_solution["wrist_yaw"],
+                    f"{prefix}_wrist_roll_joint": ik_solution["wrist_roll"]
+                }
             for joint, angle in new_angles.items():
                 self.joint_angles[joint] = self.clip_angle(joint, angle)
-                
-            # Store last valid angles
             self.last_valid_angles = self.safe_copy(self.joint_angles)
             return True
-            
         except Exception as e:
             self.ik_error_tracking['analytical_errors'] += 1
             self.ik_error_tracking['last_error_message'] = str(e)
-            print(f"[ERROR] Analytical IK failed: {str(e)}")
-            
-            # Fall back to IKPy
-            if self.try_ikpy_fallback(shoulder, elbow, wrist, prefix):
-                return True
-                
-            # If both fail, use last valid angles
-            print(f"[WARN] Using last valid angles for {prefix} arm")
+            print(f"[ERROR] IK failed: {str(e)}")
             return False
 
     def try_ikpy_fallback(self, shoulder, elbow, wrist, prefix):
         """Try to use IKPy as a fallback solver."""
+        print('[RobotRetargeter] -> try_ikpy_fallback()')
         if prefix == "right" and self.ikpy_chain_right is not None:
             chain = self.ikpy_chain_right
         elif prefix == "left" and self.ikpy_chain_left is not None:
@@ -490,6 +482,7 @@ class RobotRetargeter:
 
     def reset_calibration(self):
         """Reset calibration and tracking variables."""
+        print('[RobotRetargeter] -> reset_calibration()')
         # Reset scale to default
         self.scale = 0.5  # Or prompt for new value
         # Reset angle offset
@@ -500,6 +493,7 @@ class RobotRetargeter:
         
     def draw_error_overlay(self, ax=None):
         """Draw error information overlay."""
+        print('[RobotRetargeter] -> draw_error_overlay()')
         if self.pause_on_error and ax is not None:
             # Save current axis limits
             xlim = ax.get_xlim()
@@ -551,6 +545,7 @@ class RobotRetargeter:
 
     def update_robot_plot(self, ax=None):
         """Update the robot visualization plot."""
+        print('[RobotRetargeter] -> update_robot_plot()')
         if ax is not None:
             self.ax_robot = ax
             
@@ -566,6 +561,7 @@ class RobotRetargeter:
 
     def scale_to_robot_dimensions(self):
         """Scale human landmarks to robot dimensions."""
+        print('[RobotRetargeter] -> scale_to_robot_dimensions()')
         current_upper_arm_length_right = np.linalg.norm(
             self.robot_joints["right_elbow"] - self.robot_joints["right_shoulder"]
         )
@@ -598,6 +594,7 @@ class RobotRetargeter:
 
     def convert_to_mujoco_precise(self, angles, apply_offset=True):
         """Convert to MuJoCo compatible angle format."""
+        print('[RobotRetargeter] -> convert_to_mujoco_precise()')
         mujoco_angles = {}
         if not apply_offset:
             return self.safe_copy(angles)
@@ -613,6 +610,7 @@ class RobotRetargeter:
 
     def plot_robot_skeleton(self, ax):
         """Plot current robot skeleton state."""
+        print('[RobotRetargeter] -> plot_robot_skeleton()')
         # Plot base
         ax.scatter3D(0, 0, 0, c='r', marker='s')
 
@@ -646,6 +644,7 @@ class RobotRetargeter:
 
     def calculate_forward_kinematics(self):
         """Calculate end effector position using forward kinematics."""
+        print('[RobotRetargeter] -> calculate_forward_kinematics()')
         positions = {}
         
         # Base positions (shoulders)
@@ -698,6 +697,7 @@ class RobotRetargeter:
 
     def update_visualization_positions(self):
         """Update positions for visualization."""
+        print('[RobotRetargeter] -> update_visualization_positions()')
         positions = self.calculate_joint_positions()
         self.left_shoulder_pos = positions["left_shoulder_pitch_joint"]
         self.left_elbow_pos = positions["left_elbow_joint"]
@@ -708,6 +708,7 @@ class RobotRetargeter:
 
     def results_from_image(self, image):
         """Process image with MediaPipe and return pose results."""
+        print('[RobotRetargeter] -> results_from_image()')
         results = self.pose.process(image)
         if not results.pose_landmarks:
             print("[WARN] No pose landmarks detected.")
@@ -719,10 +720,12 @@ class RobotRetargeter:
     @staticmethod
     def safe_copy(d):
         """Create a safe copy of a dictionary."""
+        print('[RobotRetargeter] -> safe_copy()')
         return {k: v for k, v in d.items()}
 
     def smooth_motion(self, raw_angles):
         """Apply motion smoothing to joint angles using position-based and velocity-based methods."""
+        print('[RobotRetargeter] -> smooth_motion()')
         current_time = time.time()
         
         if not self.timestamp_history:
@@ -792,6 +795,7 @@ class RobotRetargeter:
 
     def initialize_from_world_landmarks(self, world_landmarks):
         """Initialize robot joint positions from MediaPipe world landmarks."""
+        print('[RobotRetargeter] -> initialize_from_world_landmarks()')
         landmarks = world_landmarks.landmark
         
         try:
@@ -850,6 +854,7 @@ class RobotRetargeter:
 
     def update_robot_state(self, results):
         """Update robot state based on human pose results."""
+        print('[RobotRetargeter] -> update_robot_state()')
         if not results:
             return False
             

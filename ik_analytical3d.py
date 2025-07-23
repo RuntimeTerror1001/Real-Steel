@@ -172,11 +172,16 @@ class IKAnalytical3D:
     def _wrist_angles_with_orientation(self, shoulder, elbow, wrist, target_orientation, sp, sy, sr, elb):
         """Calculate wrist angles considering target orientation"""
         # Build full upstream rotation (shoulder pitch, yaw, roll, then elbow)
-        T_sp       = self.transform_matrix(sp,   0,       0,      np.pi/2)
+        # Updated to match the fixed FK DH parameters with double initial rotation
+        T_initial1 = self.transform_matrix(np.pi/2, 0, 0, 0)  # +90° around Y
+        T_initial2 = self.transform_matrix(0, 0, 0, np.pi/2)  # +90° around X (alpha parameter)
+        T_initial = T_initial2 @ T_initial1
+        
+        T_sp       = self.transform_matrix(sp,   0,       0,      0)
         T_sy       = self.transform_matrix(sy,   0,       0,      0)
         T_sr       = self.transform_matrix(sr,   0,       0,      0)
         T_elb      = self.transform_matrix(elb,  0,   self.L1,      0)
-        R_partial  = (T_sp @ T_sy @ T_sr @ T_elb)[:3, :3]
+        R_partial  = (T_initial @ T_sp @ T_sy @ T_sr @ T_elb)[:3, :3]
 
         # Invert that to isolate the wrist orientation
         R_wrist    = np.linalg.inv(R_partial) @ target_orientation
@@ -259,8 +264,16 @@ class IKAnalytical3D:
         wy = joint_angles['wrist_yaw']
         wr = joint_angles['wrist_roll']
         
-        # Calculate transformation matrices
-        T_shoulder = self.transform_matrix(sp, 0, 0, np.pi/2)
+        # Calculate transformation matrices - FIXED to extend along Z-axis
+        # Add initial rotations to align with Z-axis
+        # First: rotate +90° around Y to point Y instead of X
+        # Second: rotate +90° around X to point Z instead of Y (changed from -90° to +90°)
+        T_initial1 = self.transform_matrix(np.pi/2, 0, 0, 0)  # +90° around Y
+        T_initial2 = self.transform_matrix(0, 0, 0, np.pi/2)  # +90° around X (alpha parameter)
+        T_initial = T_initial2 @ T_initial1
+        
+        # Regular DH chain
+        T_shoulder = self.transform_matrix(sp, 0, 0, 0)
         T_yaw = self.transform_matrix(sy, 0, 0, 0)
         T_roll = self.transform_matrix(sr, 0, 0, 0)
         T_elbow = self.transform_matrix(elb, 0, self.L1, 0)
@@ -268,8 +281,8 @@ class IKAnalytical3D:
         T_wrist_yaw = self.transform_matrix(wy, 0, 0, 0)
         T_wrist_roll = self.transform_matrix(wr, 0, 0, 0)
         
-        # Calculate final transformation
-        T_final = T_shoulder @ T_yaw @ T_roll @ T_elbow @ T_wrist_pitch @ T_wrist_yaw @ T_wrist_roll
+        # Calculate final transformation with initial rotation
+        T_final = T_initial @ T_shoulder @ T_yaw @ T_roll @ T_elbow @ T_wrist_pitch @ T_wrist_yaw @ T_wrist_roll
         
         # Extract position and orientation
         position = T_final[:3, 3]

@@ -1,0 +1,194 @@
+2025-07-22 01:41:48,555 - __main__ - INFO - 🥊 REAL-STEEL ENHANCED FEATURES DEMONSTRATION 🥊
+2025-07-22 01:41:48,555 - __main__ - INFO - ============================================================
+2025-07-22 01:41:48,555 - __main__ - INFO - === DUAL-PIPELINE IK DEMONSTRATION ===
+2025-07-22 01:41:48,555 - __main__ - INFO - Testing both IK solvers on identical targets...
+2025-07-22 01:41:48,555 - __main__ - INFO - 
+Target: Forward Reach
+2025-07-22 01:41:48,566 - __main__ - INFO -   Analytical IK: 0.0105s, Error: 0.026832m
+2025-07-22 01:41:48,802 - __main__ - INFO -   BRPSO IK: 0.2356s, Error: 0.001034m, Converged: False, Iterations: 50
+2025-07-22 01:41:48,802 - __main__ - INFO - 
+Target: Side Reach
+2025-07-22 01:41:48,809 - __main__ - INFO -   Analytical IK: 0.0065s, Error: 0.025592m
+2025-07-22 01:41:48,900 - __main__ - INFO -   BRPSO IK: 0.0916s, Error: 0.015049m, Converged: False, Iterations: 50
+2025-07-22 01:41:48,900 - __main__ - INFO - 
+Target: High Reach
+2025-07-22 01:41:48,905 - __main__ - INFO -   Analytical IK: 0.0039s, Error: 0.048314m
+2025-07-22 01:41:48,983 - __main__ - INFO -   BRPSO IK: 0.0787s, Error: 0.004658m, Converged: False, Iterations: 50
+2025-07-22 01:41:48,984 - __main__ - INFO - 
+=== REAL-TIME SYSTEM DEMONSTRATION ===
+2025-07-22 01:41:48,984 - __main__ - INFO - Starting Real-Steel with Analytical IK...
+2025-07-22 01:41:50,661 - pose_mirror_retargeting - INFO - VisualRobotRetargeter initialized with analytical IK solver
+2025-07-22 01:41:50,685 - pose_mirror_retargeting - INFO - Started recording to recordings/robot_motion_20250722-014150.csv
+2025-07-22 01:41:50,685 - pose_mirror_retargeting - INFO - PoseMirror3DWithRetargeting initialized
+2025-07-22 01:41:50,685 - __main__ - INFO - System initialized. In a real demo, this would show:
+2025-07-22 01:41:50,685 - __main__ - INFO - • Live camera feed with pose detection
+2025-07-22 01:41:50,685 - __main__ - INFO - • Real-time 3D pose visualization
+2025-07-22 01:41:50,685 - __main__ - INFO - • Robot retargeting with joint angle display
+2025-07-22 01:41:50,685 - __main__ - INFO - • Automatic CSV recording with 14 joint angles
+2025-07-22 01:41:50,685 - __main__ - INFO - • Runtime IK solver switching (Press 'I' key)
+2025-07-22 01:41:50,685 - __main__ - INFO - • Forward kinematics validation overlay
+2025-07-22 01:41:50,685 - __main__ - INFO - 
+Simulating motion retargeting...
+2025-07-22 01:41:50,745 - __main__ - INFO - Recorded jab motion to jab_motion.csv with 14 joint angles
+2025-07-22 01:41:50,745 - __main__ - INFO - 
+=== VISUALIZATION FEATURES DEMONSTRATION ===
+2025-07-22 01:41:50,745 - __main__ - INFO - Real-Steel provides multiple real-time visualizations:
+2025-07-22 01:41:50,745 - __main__ - INFO - 1. Window 1: Live camera feed with pose landmarks
+2025-07-22 01:41:50,745 - __main__ - INFO - 2. Window 2: 3D human pose from MediaPipe
+2025-07-22 01:41:50,745 - __main__ - INFO - 3. Window 3: Retargeted robot pose with joint visualization
+2025-07-22 01:41:50,745 - __main__ - INFO - 4. Window 4: Joint angle time series OR BRPSO convergence
+2025-07-22 01:41:50,745 - __main__ - INFO - 
+Demonstrating IK solution visualization...
+2025-07-22 01:41:50,814 - __main__ - INFO - IK Visualization created with position error: 0.031898m
+2025-07-22 01:41:50,814 - __main__ - INFO - 
+Demonstrating BRPSO convergence visualization...
+2025-07-22 01:41:51,084 - __main__ - INFO - BRPSO visualizations created. Final error: 0.000409m
+2025-07-22 01:41:51,084 - __main__ - INFO - 
+=== PERFORMANCE COMPARISON ===
+2025-07-22 01:41:51,084 - __main__ - INFO - Testing Analytical IK Solver...
+2025-07-22 01:41:51,118 - __main__ - INFO - Testing BRPSO IK Solver...
+2025-07-22 01:41:51,694 - __main__ - INFO - 
+=== PERFORMANCE RESULTS ===
+2025-07-22 01:41:51,694 - __main__ - INFO - Analytical IK:
+2025-07-22 01:41:51,694 - __main__ - INFO -   Success Rate: 10/10 (100.0%)
+2025-07-22 01:41:51,694 - __main__ - INFO -   Average Time: 0.0034s
+2025-07-22 01:41:51,694 - __main__ - INFO -   Average Error: 0.236177m
+2025-07-22 01:41:51,694 - __main__ - INFO - BRPSO IK:
+2025-07-22 01:41:51,694 - __main__ - INFO -   Success Rate: 0/10 (0.0%)
+2025-07-22 01:41:51,694 - __main__ - INFO - 
+============================================================
+2025-07-22 01:41:51,694 - __main__ - INFO - ✅ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY!
+2025-07-22 01:41:51,694 - __main__ - INFO - ============================================================
+2025-07-22 01:41:51,694 - __main__ - INFO - 
+To run the full Real-Steel system:
+2025-07-22 01:41:51,694 - __main__ - INFO - python main.py --ik-backend analytical
+2025-07-22 01:41:51,694 - __main__ - INFO - python main.py --ik-backend brpso
+2025-07-22 01:41:51,694 - __main__ - INFO - 
+Check the generated files:
+2025-07-22 01:41:51,694 - __main__ - INFO - • jab_motion.csv - Sample motion data with 14 joint angles
+2025-07-22 01:41:51,694 - __main__ - INFO - • demo_enhanced_features.log - Demo execution log
+2025-07-22 01:41:51,694 - __main__ - INFO - • Various visualization plots showing IK solutions
+2025-07-22 01:57:36,357 - __main__ - INFO - 🥊 REAL-STEEL ENHANCED FEATURES DEMONSTRATION 🥊
+2025-07-22 01:57:36,357 - __main__ - INFO - ============================================================
+2025-07-22 01:57:36,357 - __main__ - INFO - === DUAL-PIPELINE IK DEMONSTRATION ===
+2025-07-22 01:57:36,357 - __main__ - INFO - Testing both IK solvers on identical targets...
+2025-07-22 01:57:36,357 - __main__ - INFO - 
+Target: Forward Reach
+2025-07-22 01:57:36,361 - __main__ - INFO -   Analytical IK: 0.0035s, Error: 0.026832m
+2025-07-22 01:57:36,437 - __main__ - INFO -   BRPSO IK: 0.0766s, Error: 0.001098m, Converged: False, Iterations: 50
+2025-07-22 01:57:36,438 - __main__ - INFO - 
+Target: Side Reach
+2025-07-22 01:57:36,441 - __main__ - INFO -   Analytical IK: 0.0034s, Error: 0.025592m
+2025-07-22 01:57:36,506 - __main__ - INFO -   BRPSO IK: 0.0643s, Error: 0.005709m, Converged: False, Iterations: 50
+2025-07-22 01:57:36,506 - __main__ - INFO - 
+Target: High Reach
+2025-07-22 01:57:36,508 - __main__ - ERROR -   Analytical IK failed: [Errno 32] Broken pipe
+2025-07-22 01:57:36,566 - __main__ - INFO -   BRPSO IK: 0.0580s, Error: 0.002836m, Converged: False, Iterations: 50
+2025-07-22 01:57:36,566 - __main__ - INFO - 
+=== REAL-TIME SYSTEM DEMONSTRATION ===
+2025-07-22 01:57:36,566 - __main__ - INFO - Starting Real-Steel with Analytical IK...
+2025-07-22 01:57:37,745 - pose_mirror_retargeting - INFO - VisualRobotRetargeter initialized with analytical IK solver
+2025-07-22 01:57:37,747 - pose_mirror_retargeting - INFO - Started recording to recordings/robot_motion_20250722-015737.csv
+2025-07-22 01:57:37,747 - pose_mirror_retargeting - INFO - PoseMirror3DWithRetargeting initialized
+2025-07-22 01:57:37,747 - __main__ - INFO - System initialized. In a real demo, this would show:
+2025-07-22 01:57:37,747 - __main__ - INFO - • Live camera feed with pose detection
+2025-07-22 01:57:37,747 - __main__ - INFO - • Real-time 3D pose visualization
+2025-07-22 01:57:37,747 - __main__ - INFO - • Robot retargeting with joint angle display
+2025-07-22 01:57:37,748 - __main__ - INFO - • Automatic CSV recording with 14 joint angles
+2025-07-22 01:57:37,748 - __main__ - INFO - • Runtime IK solver switching (Press 'I' key)
+2025-07-22 01:57:37,748 - __main__ - INFO - • Forward kinematics validation overlay
+2025-07-22 01:57:37,748 - __main__ - INFO - 
+Simulating motion retargeting...
+2025-07-22 01:57:37,776 - __main__ - INFO - Recorded jab motion to jab_motion.csv with 14 joint angles
+2025-07-22 01:57:37,776 - __main__ - INFO - 
+=== VISUALIZATION FEATURES DEMONSTRATION ===
+2025-07-22 01:57:37,776 - __main__ - INFO - Real-Steel provides multiple real-time visualizations:
+2025-07-22 01:57:37,776 - __main__ - INFO - 1. Window 1: Live camera feed with pose landmarks
+2025-07-22 01:57:37,776 - __main__ - INFO - 2. Window 2: 3D human pose from MediaPipe
+2025-07-22 01:57:37,776 - __main__ - INFO - 3. Window 3: Retargeted robot pose with joint visualization
+2025-07-22 01:57:37,776 - __main__ - INFO - 4. Window 4: Joint angle time series OR BRPSO convergence
+2025-07-22 01:57:37,776 - __main__ - INFO - 
+Demonstrating IK solution visualization...
+2025-07-22 01:57:37,778 - __main__ - ERROR - Demo failed: [Errno 32] Broken pipe
+Traceback (most recent call last):
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/demo_enhanced_features.py", line 298, in main
+    demo_visualization_features()
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/demo_enhanced_features.py", line 182, in demo_visualization_features
+    solution = solver.solve(shoulder, elbow, wrist)
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/src/core/ik_analytical3d.py", line 372, in solve
+    p_eps, _ = self.forward_kinematics(a_eps)
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/src/core/ik_analytical3d.py", line 88, in forward_kinematics
+    T = T @ self.transform_matrix(el, 0, self.L1, 0)   # Elbow Flex, L₁=0.1032 m
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/src/core/ik_analytical3d.py", line 72, in transform_matrix
+    print('[IKAnalytical3D] -> transform_matrix()')
+BrokenPipeError: [Errno 32] Broken pipe
+2025-07-22 02:00:53,685 - __main__ - INFO - 🥊 REAL-STEEL ENHANCED FEATURES DEMONSTRATION 🥊
+2025-07-22 02:00:53,686 - __main__ - INFO - ============================================================
+2025-07-22 02:00:53,686 - __main__ - INFO - === DUAL-PIPELINE IK DEMONSTRATION ===
+2025-07-22 02:00:53,686 - __main__ - INFO - Testing both IK solvers on identical targets...
+2025-07-22 02:00:53,686 - __main__ - INFO - 
+Target: Forward Reach
+2025-07-22 02:00:53,689 - __main__ - INFO -   Analytical IK: 0.0035s, Error: 0.026832m
+2025-07-22 02:00:53,753 - __main__ - INFO -   BRPSO IK: 0.0632s, Error: 0.001096m, Converged: False, Iterations: 50
+2025-07-22 02:00:53,753 - __main__ - INFO - 
+Target: Side Reach
+2025-07-22 02:00:53,756 - __main__ - INFO -   Analytical IK: 0.0028s, Error: 0.025592m
+2025-07-22 02:00:53,817 - __main__ - INFO -   BRPSO IK: 0.0610s, Error: 0.036153m, Converged: False, Iterations: 50
+2025-07-22 02:00:53,817 - __main__ - INFO - 
+Target: High Reach
+2025-07-22 02:00:53,820 - __main__ - INFO -   Analytical IK: 0.0034s, Error: 0.048314m
+2025-07-22 02:00:53,880 - __main__ - INFO -   BRPSO IK: 0.0591s, Error: 0.007345m, Converged: False, Iterations: 50
+2025-07-22 02:00:53,880 - __main__ - INFO - 
+=== REAL-TIME SYSTEM DEMONSTRATION ===
+2025-07-22 02:00:53,880 - __main__ - INFO - Starting Real-Steel with Analytical IK...
+2025-07-22 02:00:54,886 - pose_mirror_retargeting - INFO - VisualRobotRetargeter initialized with analytical IK solver
+2025-07-22 02:00:54,888 - pose_mirror_retargeting - INFO - Started recording to recordings/robot_motion_20250722-020054.csv
+2025-07-22 02:00:54,888 - pose_mirror_retargeting - INFO - PoseMirror3DWithRetargeting initialized
+2025-07-22 02:00:54,888 - __main__ - INFO - System initialized. In a real demo, this would show:
+2025-07-22 02:00:54,889 - __main__ - INFO - • Live camera feed with pose detection
+2025-07-22 02:00:54,889 - __main__ - INFO - • Real-time 3D pose visualization
+2025-07-22 02:00:54,889 - __main__ - INFO - • Robot retargeting with joint angle display
+2025-07-22 02:00:54,889 - __main__ - INFO - • Automatic CSV recording with 14 joint angles
+2025-07-22 02:00:54,889 - __main__ - INFO - • Runtime IK solver switching (Press 'I' key)
+2025-07-22 02:00:54,889 - __main__ - INFO - • Forward kinematics validation overlay
+2025-07-22 02:00:54,889 - __main__ - INFO - 
+Simulating motion retargeting...
+2025-07-22 02:00:54,954 - __main__ - INFO - Recorded jab motion to jab_motion.csv with 14 joint angles
+2025-07-22 02:00:54,955 - __main__ - INFO - 
+=== VISUALIZATION FEATURES DEMONSTRATION ===
+2025-07-22 02:00:54,955 - __main__ - INFO - Real-Steel provides multiple real-time visualizations:
+2025-07-22 02:00:54,955 - __main__ - INFO - 1. Window 1: Live camera feed with pose landmarks
+2025-07-22 02:00:54,955 - __main__ - INFO - 2. Window 2: 3D human pose from MediaPipe
+2025-07-22 02:00:54,955 - __main__ - INFO - 3. Window 3: Retargeted robot pose with joint visualization
+2025-07-22 02:00:54,955 - __main__ - INFO - 4. Window 4: Joint angle time series OR BRPSO convergence
+2025-07-22 02:00:54,955 - __main__ - INFO - 
+Demonstrating IK solution visualization...
+2025-07-22 02:00:55,033 - __main__ - INFO - IK Visualization created with position error: 0.031898m
+2025-07-22 02:00:55,033 - __main__ - INFO - 
+Demonstrating BRPSO convergence visualization...
+2025-07-22 02:00:55,286 - __main__ - INFO - BRPSO visualizations created. Final error: 0.000418m
+2025-07-22 02:00:55,286 - __main__ - INFO - 
+=== PERFORMANCE COMPARISON ===
+2025-07-22 02:00:55,286 - __main__ - INFO - Testing Analytical IK Solver...
+2025-07-22 02:00:55,315 - __main__ - INFO - Testing BRPSO IK Solver...
+2025-07-22 02:00:55,683 - __main__ - INFO - 
+=== PERFORMANCE RESULTS ===
+2025-07-22 02:00:55,683 - __main__ - INFO - Analytical IK:
+2025-07-22 02:00:55,683 - __main__ - INFO -   Success Rate: 10/10 (100.0%)
+2025-07-22 02:00:55,683 - __main__ - INFO -   Average Time: 0.0027s
+2025-07-22 02:00:55,683 - __main__ - INFO -   Average Error: 0.132329m
+2025-07-22 02:00:55,684 - __main__ - INFO - BRPSO IK:
+2025-07-22 02:00:55,684 - __main__ - INFO -   Success Rate: 0/10 (0.0%)
+2025-07-22 02:00:55,684 - __main__ - INFO - 
+============================================================
+2025-07-22 02:00:55,684 - __main__ - INFO - ✅ ALL DEMONSTRATIONS COMPLETED SUCCESSFULLY!
+2025-07-22 02:00:55,684 - __main__ - INFO - ============================================================
+2025-07-22 02:00:55,684 - __main__ - INFO - 
+To run the full Real-Steel system:
+2025-07-22 02:00:55,684 - __main__ - INFO - python main.py --ik-backend analytical
+2025-07-22 02:00:55,684 - __main__ - INFO - python main.py --ik-backend brpso
+2025-07-22 02:00:55,684 - __main__ - INFO - 
+Check the generated files:
+2025-07-22 02:00:55,684 - __main__ - INFO - • jab_motion.csv - Sample motion data with 14 joint angles
+2025-07-22 02:00:55,684 - __main__ - INFO - • demo_enhanced_features.log - Demo execution log
+2025-07-22 02:00:55,684 - __main__ - INFO - • Various visualization plots showing IK solutions

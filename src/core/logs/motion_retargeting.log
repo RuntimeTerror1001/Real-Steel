@@ -1,0 +1,8 @@
+2025-07-22 02:16:08,958 - pose_mirror_retargeting - INFO - VisualRobotRetargeter initialized with brpso IK solver
+2025-07-22 02:16:09,279 - pose_mirror_retargeting - INFO - PoseMirror3DWithRetargeting initialized
+2025-07-22 02:16:12,490 - pose_mirror_retargeting - INFO - Real-Steel motion retargeting system started
+2025-07-22 02:16:35,769 - pose_mirror_retargeting - INFO - Real-Steel system cleanup complete
+2025-07-22 02:43:14,155 - __main__ - INFO - Starting Real-Steel with analytical IK, live mode
+2025-07-22 02:43:36,385 - __main__ - INFO - Real-Steel system shutdown complete
+2025-07-22 02:43:46,334 - __main__ - INFO - Starting Real-Steel with brpso IK, live mode
+2025-07-22 02:43:59,703 - __main__ - INFO - Real-Steel system shutdown complete

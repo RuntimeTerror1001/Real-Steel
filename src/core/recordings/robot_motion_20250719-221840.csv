@@ -1,0 +1,12 @@
+frame,timestamp,left_shoulder_x,left_shoulder_y,left_shoulder_z,left_elbow_x,left_elbow_y,left_elbow_z,left_wrist_x,left_wrist_y,left_wrist_z,right_shoulder_x,right_shoulder_y,right_shoulder_z,right_elbow_x,right_elbow_y,right_elbow_z,right_wrist_x,right_wrist_y,right_wrist_z,right_shoulder_pitch_joint,right_shoulder_roll_joint,right_shoulder_yaw_joint,right_elbow_joint,right_wrist_pitch_joint,right_wrist_roll_joint,right_wrist_yaw_joint,left_shoulder_pitch_joint,left_shoulder_roll_joint,left_shoulder_yaw_joint,left_elbow_joint,left_wrist_pitch_joint,left_wrist_roll_joint,left_wrist_yaw_joint
+6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0
+0.0,0.1,0.0,-0.1,0.6,0.0,0.0,0.0,0.1,0.0,0.1,0.6,0.0,0.0,0.0

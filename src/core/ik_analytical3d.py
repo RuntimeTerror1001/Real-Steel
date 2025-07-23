@@ -7,6 +7,34 @@ Uses DH parameters and full geometric decomposition with orientation handling
 import numpy as np
 from numpy import pi, cos, sin, arccos, arctan2, sqrt
 import math
+import logging
+import sys
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    stream_handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+# Global logging control for method calls
+DEBUG_METHOD_CALLS = False  # Set to True for verbose method call logging
+
+def log_method_call(cls_name):
+    def decorator(func):
+        def wrapper(self, *args, **kwargs):
+            if DEBUG_METHOD_CALLS:
+                print(f"[{cls_name}] -> {func.__name__}()")
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
+
+def set_debug_logging(enabled=True):
+    """Enable or disable verbose method call logging"""
+    global DEBUG_METHOD_CALLS
+    DEBUG_METHOD_CALLS = enabled
+    print(f"Analytical IK debug logging: {'ENABLED' if enabled else 'DISABLED'}")
 
 class IKAnalytical3DRefined:
     def __init__(
@@ -20,6 +48,7 @@ class IKAnalytical3DRefined:
         refinement_gain=0.5
     ):
         """Initialize the IK solver with specified parameters."""
+        print('[IKAnalytical3D] -> __init__()')
         # Lengths of arm segments
         self.L1 = upper_arm_length # Shoulder to elbow
         self.L2 = lower_arm_length # Elbow to wrist
@@ -50,9 +79,11 @@ class IKAnalytical3DRefined:
         self.last_wrist_roll = 0.0
 
     def clip(self, joint, angle):
+        print('[IKAnalytical3D] -> clip()')
         lo, hi = self.joint_limits[joint]
         return np.clip(angle, lo, hi)
 
+    @log_method_call('IKAnalytical3D')
     def transform_matrix(self, theta, d, a, alpha):
         return np.array([
             [cos(theta), -sin(theta)*cos(alpha),  sin(theta)*sin(alpha), a*cos(theta)],
@@ -61,6 +92,7 @@ class IKAnalytical3DRefined:
             [0,            0,                      0,                    1]
         ])
     
+    @log_method_call('IKAnalytical3D')
     def forward_kinematics(self, angles):
         sy = angles['shoulder_yaw']; sp = angles['shoulder_pitch']; sr = angles['shoulder_roll']
         el = angles['elbow']; wp = angles['wrist_pitch']; wy = angles['wrist_yaw']; wr = angles['wrist_roll']
@@ -90,6 +122,7 @@ class IKAnalytical3DRefined:
         Returns:
             Tuple of (pitch, yaw, roll) angles
         """
+        print('[IKAnalytical3D] -> _shoulder_angles()')
         # Calculate shoulder pitch (elevation)
         xy = math.sqrt(le[0]**2 + le[1]**2)
         pitch = math.atan2(le[2], xy)
@@ -138,6 +171,7 @@ class IKAnalytical3DRefined:
         return pitch, yaw, roll
 
     def _elbow_angle(self, sh, el, wr):
+        print('[IKAnalytical3D] -> _elbow_angle()')
         a = np.linalg.norm(el-sh); b = np.linalg.norm(wr-el); c = np.linalg.norm(wr-sh)
         cos_t = np.clip((a*a + b*b - c*c)/(2*a*b+1e-8), -1,1)
         return np.pi - arccos(cos_t)
@@ -146,6 +180,7 @@ class IKAnalytical3DRefined:
         """
         Compute wrist angles (pitch, yaw) for 5-dof mode
         """
+        print('[IKAnalytical3D] -> _wrist_angles()')
         # Compute direction
         v = wr-el
         n = np.linalg.norm(v)
@@ -186,6 +221,7 @@ class IKAnalytical3DRefined:
         Returns:
         - wrist_angles: dict with 'pitch', 'yaw', 'roll'
         """
+        print('[IKAnalytical3D] -> calculate_wrist_angles()')
         # Get target position in local coordinates
         target_pos = desired_hand_pose['position']
         
@@ -479,6 +515,7 @@ class IKAnalytical3DRefined:
         return (self.clip('wrist_pitch', pitch),
                 self.clip('wrist_yaw', yaw),
                 self.clip('wrist_roll', roll))
+
 
 
 # For backward compatibility

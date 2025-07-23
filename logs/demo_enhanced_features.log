@@ -1,0 +1,130 @@
+2025-07-05 16:55:39,167 - __main__ - INFO - setup_enhanced_logging:47 - Enhanced logging initialized with level: INFO
+2025-07-05 16:55:39,168 - __main__ - INFO - main:428 - Starting Enhanced Real-Steel Motion Retargeting Features Demo
+2025-07-05 16:55:39,175 - __main__ - INFO - create_sample_validation_log:405 - Created sample validation log: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:44,890 - __main__ - INFO - setup_enhanced_logging:47 - Enhanced logging initialized with level: INFO
+2025-07-05 16:55:44,890 - __main__ - INFO - main:428 - Starting Enhanced Real-Steel Motion Retargeting Features Demo
+2025-07-05 16:55:44,890 - __main__ - INFO - generate_validation_report:164 - Starting validation report generation for: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:44,890 - __main__ - DEBUG - validate_log_file:63 - Starting validation of log file: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:44,890 - __main__ - DEBUG - validate_log_file:81 - Log file size: 11909 bytes (11.63 KB)
+2025-07-05 16:55:44,893 - __main__ - DEBUG - validate_log_file:86 - Successfully parsed CSV with 50 rows and 12 columns
+2025-07-05 16:55:44,895 - __main__ - DEBUG - validate_log_file:147 - Timestamp format validation passed
+2025-07-05 16:55:44,895 - __main__ - INFO - validate_log_file:152 - Log file validation successful: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:44,895 - __main__ - INFO - generate_validation_report:173 - ✅ Log file validation passed
+2025-07-05 16:55:44,896 - __main__ - INFO - generate_validation_report:179 - Loaded 50 validation samples
+2025-07-05 16:55:44,896 - __main__ - INFO - generate_validation_report:198 - Calculated statistics for 50 samples
+2025-07-05 16:55:44,905 - __main__ - DEBUG - generate_validation_report:206 - Generated motion-specific statistics for 5 motion types
+2025-07-05 16:55:44,905 - __main__ - INFO - generate_validation_report:232 - Validation report generated for 50 samples
+2025-07-05 16:55:44,905 - __main__ - INFO - generate_validation_report:233 - Overall position error - Avg: 0.017745m, Max: 0.038523m
+2025-07-05 16:55:44,905 - __main__ - INFO - generate_validation_report:234 - Overall angle error - Avg: 0.050356rad, Max: 0.081293rad
+2025-07-05 16:55:44,906 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Guard
+Name: 0, dtype: object' statistics:
+2025-07-05 16:55:44,906 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.018515m, Max=0.027674m
+2025-07-05 16:55:44,906 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.052838rad, Max=0.080761rad
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Hook
+Name: 1, dtype: object' statistics:
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.017861m, Max=0.038523m
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.041978rad, Max=0.068626rad
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Jab
+Name: 2, dtype: object' statistics:
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015137m, Max=0.021969m
+2025-07-05 16:55:44,907 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.057976rad, Max=0.081293rad
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Cross
+Name: 3, dtype: object' statistics:
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.020039m, Max=0.035792m
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050069rad, Max=0.077125rad
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Uppercut
+Name: 4, dtype: object' statistics:
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015009m, Max=0.023142m
+2025-07-05 16:55:44,908 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050286rad, Max=0.070071rad
+2025-07-05 16:55:44,908 - __main__ - INFO - generate_validation_report:280 - Validation report generated successfully
+2025-07-05 16:55:50,548 - __main__ - INFO - setup_enhanced_logging:47 - Enhanced logging initialized with level: INFO
+2025-07-05 16:55:50,548 - __main__ - INFO - main:428 - Starting Enhanced Real-Steel Motion Retargeting Features Demo
+2025-07-05 16:55:50,549 - __main__ - INFO - list_validation_logs:299 - Scanning for validation logs in: validation_logs
+2025-07-05 16:55:50,562 - __main__ - DEBUG - list_validation_logs:314 - Found 2 CSV files in validation_logs
+2025-07-05 16:55:50,562 - __main__ - INFO - list_validation_logs:329 - Found 2 validation log files
+2025-07-05 16:55:50,562 - __main__ - DEBUG - validate_log_file:63 - Starting validation of log file: validation_logs/demo_validation_20250705_165123.csv
+2025-07-05 16:55:50,562 - __main__ - DEBUG - validate_log_file:81 - Log file size: 4837 bytes (4.72 KB)
+2025-07-05 16:55:50,564 - __main__ - DEBUG - validate_log_file:86 - Successfully parsed CSV with 20 rows and 12 columns
+2025-07-05 16:55:50,565 - __main__ - DEBUG - validate_log_file:147 - Timestamp format validation passed
+2025-07-05 16:55:50,565 - __main__ - INFO - validate_log_file:152 - Log file validation successful: validation_logs/demo_validation_20250705_165123.csv
+2025-07-05 16:55:50,565 - __main__ - DEBUG - validate_log_file:63 - Starting validation of log file: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:50,565 - __main__ - DEBUG - validate_log_file:81 - Log file size: 11909 bytes (11.63 KB)
+2025-07-05 16:55:50,567 - __main__ - DEBUG - validate_log_file:86 - Successfully parsed CSV with 50 rows and 12 columns
+2025-07-05 16:55:50,567 - __main__ - DEBUG - validate_log_file:147 - Timestamp format validation passed
+2025-07-05 16:55:50,567 - __main__ - INFO - validate_log_file:152 - Log file validation successful: validation_logs/sample_validation_20250705_165539.csv
+2025-07-05 16:55:54,618 - __main__ - INFO - setup_enhanced_logging:47 - Enhanced logging initialized with level: DEBUG
+2025-07-05 16:55:54,618 - __main__ - INFO - main:428 - Starting Enhanced Real-Steel Motion Retargeting Features Demo
+2025-07-05 16:55:54,622 - __main__ - INFO - create_sample_validation_log:405 - Created sample validation log: validation_logs/sample_validation_20250705_165554.csv
+2025-07-05 16:55:54,622 - __main__ - INFO - generate_validation_report:164 - Starting validation report generation for: validation_logs/sample_validation_20250705_165554.csv
+2025-07-05 16:55:54,622 - __main__ - DEBUG - validate_log_file:63 - Starting validation of log file: validation_logs/sample_validation_20250705_165554.csv
+2025-07-05 16:55:54,622 - __main__ - DEBUG - validate_log_file:81 - Log file size: 11909 bytes (11.63 KB)
+2025-07-05 16:55:54,628 - __main__ - DEBUG - validate_log_file:86 - Successfully parsed CSV with 50 rows and 12 columns
+2025-07-05 16:55:54,629 - __main__ - DEBUG - validate_log_file:147 - Timestamp format validation passed
+2025-07-05 16:55:54,629 - __main__ - INFO - validate_log_file:152 - Log file validation successful: validation_logs/sample_validation_20250705_165554.csv
+2025-07-05 16:55:54,629 - __main__ - INFO - generate_validation_report:173 - ✅ Log file validation passed
+2025-07-05 16:55:54,630 - __main__ - INFO - generate_validation_report:179 - Loaded 50 validation samples
+2025-07-05 16:55:54,630 - __main__ - INFO - generate_validation_report:198 - Calculated statistics for 50 samples
+2025-07-05 16:55:54,632 - __main__ - DEBUG - generate_validation_report:206 - Generated motion-specific statistics for 5 motion types
+2025-07-05 16:55:54,632 - __main__ - INFO - generate_validation_report:232 - Validation report generated for 50 samples
+2025-07-05 16:55:54,632 - __main__ - INFO - generate_validation_report:233 - Overall position error - Avg: 0.017745m, Max: 0.038523m
+2025-07-05 16:55:54,632 - __main__ - INFO - generate_validation_report:234 - Overall angle error - Avg: 0.050356rad, Max: 0.081293rad
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Guard
+Name: 0, dtype: object' statistics:
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.018515m, Max=0.027674m
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.052838rad, Max=0.080761rad
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Hook
+Name: 1, dtype: object' statistics:
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.017861m, Max=0.038523m
+2025-07-05 16:55:54,633 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.041978rad, Max=0.068626rad
+2025-07-05 16:55:54,634 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Jab
+Name: 2, dtype: object' statistics:
+2025-07-05 16:55:54,634 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015137m, Max=0.021969m
+2025-07-05 16:55:54,634 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.057976rad, Max=0.081293rad
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Cross
+Name: 3, dtype: object' statistics:
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.020039m, Max=0.035792m
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050069rad, Max=0.077125rad
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Uppercut
+Name: 4, dtype: object' statistics:
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015009m, Max=0.023142m
+2025-07-05 16:55:54,635 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050286rad, Max=0.070071rad
+2025-07-05 16:55:54,635 - __main__ - INFO - generate_validation_report:280 - Validation report generated successfully
+2025-07-05 16:55:54,635 - __main__ - INFO - main:470 - Enhanced features demonstration completed
+2025-07-05 20:12:00,795 - __main__ - INFO - setup_enhanced_logging:47 - Enhanced logging initialized with level: DEBUG
+2025-07-05 20:12:00,795 - __main__ - INFO - main:428 - Starting Enhanced Real-Steel Motion Retargeting Features Demo
+2025-07-05 20:12:00,802 - __main__ - INFO - create_sample_validation_log:405 - Created sample validation log: validation_logs/sample_validation_20250705_201200.csv
+2025-07-05 20:12:00,803 - __main__ - INFO - generate_validation_report:164 - Starting validation report generation for: validation_logs/sample_validation_20250705_201200.csv
+2025-07-05 20:12:00,803 - __main__ - DEBUG - validate_log_file:63 - Starting validation of log file: validation_logs/sample_validation_20250705_201200.csv
+2025-07-05 20:12:00,803 - __main__ - DEBUG - validate_log_file:81 - Log file size: 11909 bytes (11.63 KB)
+2025-07-05 20:12:00,806 - __main__ - DEBUG - validate_log_file:86 - Successfully parsed CSV with 50 rows and 12 columns
+2025-07-05 20:12:00,807 - __main__ - DEBUG - validate_log_file:147 - Timestamp format validation passed
+2025-07-05 20:12:00,807 - __main__ - INFO - validate_log_file:152 - Log file validation successful: validation_logs/sample_validation_20250705_201200.csv
+2025-07-05 20:12:00,807 - __main__ - INFO - generate_validation_report:173 - ✅ Log file validation passed
+2025-07-05 20:12:00,808 - __main__ - INFO - generate_validation_report:179 - Loaded 50 validation samples
+2025-07-05 20:12:00,808 - __main__ - INFO - generate_validation_report:198 - Calculated statistics for 50 samples
+2025-07-05 20:12:00,815 - __main__ - DEBUG - generate_validation_report:206 - Generated motion-specific statistics for 5 motion types
+2025-07-05 20:12:00,816 - __main__ - INFO - generate_validation_report:232 - Validation report generated for 50 samples
+2025-07-05 20:12:00,816 - __main__ - INFO - generate_validation_report:233 - Overall position error - Avg: 0.017745m, Max: 0.038523m
+2025-07-05 20:12:00,816 - __main__ - INFO - generate_validation_report:234 - Overall angle error - Avg: 0.050356rad, Max: 0.081293rad
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Guard
+Name: 0, dtype: object' statistics:
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.018515m, Max=0.027674m
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.052838rad, Max=0.080761rad
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Hook
+Name: 1, dtype: object' statistics:
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.017861m, Max=0.038523m
+2025-07-05 20:12:00,817 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.041978rad, Max=0.068626rad
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Left Jab
+Name: 2, dtype: object' statistics:
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015137m, Max=0.021969m
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.057976rad, Max=0.081293rad
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Cross
+Name: 3, dtype: object' statistics:
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.020039m, Max=0.035792m
+2025-07-05 20:12:00,818 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050069rad, Max=0.077125rad
+2025-07-05 20:12:00,819 - __main__ - DEBUG - generate_validation_report:251 - Motion '    Right Uppercut
+Name: 4, dtype: object' statistics:
+2025-07-05 20:12:00,819 - __main__ - DEBUG - generate_validation_report:252 -   - Position error: Avg=0.015009m, Max=0.023142m
+2025-07-05 20:12:00,819 - __main__ - DEBUG - generate_validation_report:253 -   - Angle error: Avg=0.050286rad, Max=0.070071rad
+2025-07-05 20:12:00,819 - __main__ - INFO - generate_validation_report:280 - Validation report generated successfully
+2025-07-05 20:12:00,819 - __main__ - INFO - main:470 - Enhanced features demonstration completed

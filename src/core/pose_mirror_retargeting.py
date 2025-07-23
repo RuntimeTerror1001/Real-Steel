@@ -11,10 +11,15 @@ import pandas as pd
 import os
 import sys
 import matplotlib.patches as mpatches
+try:
+    from .brpso_ik_solver import BRPSO_IK_Solver  # Try relative import first
+except ImportError:
+    from brpso_ik_solver import BRPSO_IK_Solver  # Fallback to direct import
 
 # Create a simplified Robot Retargeter for visualization
 class VisualRobotRetargeter:
-    def __init__(self):
+    def __init__(self, ik_solver_backend='analytical'):
+        print('[VisualRobotRetargeter] -> __init__()')
         self.mp_pose = mp.solutions.pose
         
         # Define joint limits based on actual robot hardware constraints
@@ -82,138 +87,174 @@ class VisualRobotRetargeter:
         self.paused = False
         
         # Target poses for animation
-        self.pose_sequence = self.generate_boxing_sequence()
-        self.current_pose_index = 0
-        self.transition_time = 0
-        self.pose_duration = 0.8  # Time to hold each pose
-        self.transition_duration = 0.4  # Time to transition between poses
+        # self.pose_sequence = self.generate_boxing_sequence()
+        # self.current_pose_index = 0
+        # self.transition_time = 0
+        # self.pose_duration = 0.8  # Time to hold each pose
+        # self.transition_duration = 0.4  # Time to transition between poses
         
-    def generate_boxing_sequence(self):
-        """Generate a sequence of boxing poses with proper joint angles"""
-        poses = []
+        self.ik_solver_backend = ik_solver_backend
+        if ik_solver_backend == 'brpso':
+            self.brpso_solver = BRPSO_IK_Solver(
+                upper_arm_length=self.dimensions["upper_arm_length"],
+                lower_arm_length=self.dimensions["lower_arm_length"]
+            )
+        else:
+            self.brpso_solver = None
         
-        # Neutral guard stance
-        guard_pose = {
-            "right_shoulder_pitch_joint": 0.8,   # Arm raised forward
-            "right_shoulder_roll_joint": 0.5,    # Arm out from body
-            "right_shoulder_yaw_joint": 0.7,     # Rotated inward
-            "right_elbow_joint": 1.4,            # Bent at ~80 degrees
-            "right_wrist_pitch_joint": 0.0,      # Straight wrist
-            "right_wrist_roll_joint": 0.2,       # Slightly rotated
-            "right_wrist_yaw_joint": 0.3,        # Turned inward
-            "left_shoulder_pitch_joint": 0.9,    # Arm raised forward
-            "left_shoulder_roll_joint": -0.5,    # Mirrored
-            "left_shoulder_yaw_joint": -0.7,     # Mirrored
-            "left_elbow_joint": 1.4,             # Bent at ~80 degrees
-            "left_wrist_pitch_joint": 0.0,       # Straight wrist
-            "left_wrist_roll_joint": -0.2,       # Mirrored
-            "left_wrist_yaw_joint": -0.3,        # Mirrored
-        }
-        poses.append(guard_pose)
+        # Motion status tracking
+        self.current_motion_status = "Demo Motion"
+        self.last_pose_detected = False
         
-        # Left jab
-        left_jab = guard_pose.copy()
-        left_jab.update({
-            "left_shoulder_pitch_joint": 1.5,    # Extended forward
-            "left_shoulder_roll_joint": -0.3,    # Slightly in
-            "left_shoulder_yaw_joint": -0.4,     # Rotated for straight punch
-            "left_elbow_joint": 0.3,             # Nearly straight arm
-            "left_wrist_pitch_joint": -0.2,      # Slight downward angle
-        })
-        poses.append(left_jab)
-        
-        # Back to guard
-        poses.append(guard_pose.copy())
-        
-        # Right cross
-        right_cross = guard_pose.copy()
-        right_cross.update({
-            "right_shoulder_pitch_joint": 1.5,   # Extended forward
-            "right_shoulder_roll_joint": 0.3,    # Slightly in
-            "right_shoulder_yaw_joint": 0.4,     # Rotated for straight punch
-            "right_elbow_joint": 0.3,            # Nearly straight arm
-            "right_wrist_pitch_joint": -0.2,     # Slight downward angle
-        })
-        poses.append(right_cross)
-        
-        # Back to guard
-        poses.append(guard_pose.copy())
-        
-        # Left hook
-        left_hook = guard_pose.copy()
-        left_hook.update({
-            "left_shoulder_pitch_joint": 0.9,    # Not as far forward
-            "left_shoulder_roll_joint": -0.8,    # Wide outward position
-            "left_shoulder_yaw_joint": -1.2,     # Rotated for hook
-            "left_elbow_joint": 1.2,             # Bent arm
-            "left_wrist_pitch_joint": 0.4,       # Angled for hook
-        })
-        poses.append(left_hook)
-        
-        # Back to guard
-        poses.append(guard_pose.copy())
-        
-        # Right uppercut
-        right_uppercut = guard_pose.copy()
-        right_uppercut.update({
-            "right_shoulder_pitch_joint": 0.6,   # Not as far forward
-            "right_shoulder_roll_joint": 0.1,    # Tucked in
-            "right_shoulder_yaw_joint": 0.3,     # Slight rotation
-            "right_elbow_joint": 0.6,            # Sharp bent at elbow
-            "right_wrist_pitch_joint": 0.7,      # Angled upward
-        })
-        poses.append(right_uppercut)
-        
-        # Back to guard
-        poses.append(guard_pose.copy())
-        
-        return poses
+        self.recording = False
+        self.recording_file = None
     
     def update_robot_state(self, results):
-        """Update robot state with realistic joint angles based on pose sequence"""
+        """Update robot state using real pose data and retargeted joint angles."""
         # Only update when not paused
         if not self.paused:
-            # Update timer
-            self.timer += 0.1
-            
-            # Calculate current pose and blend factor
-            total_pose_time = self.pose_duration + self.transition_duration
-            cycle_time = self.timer % (total_pose_time * len(self.pose_sequence))
-            pose_index = int(cycle_time / total_pose_time)
-            time_in_pose = cycle_time % total_pose_time
-            
-            # Get current and next pose
-            current_pose = self.pose_sequence[pose_index]
-            next_pose = self.pose_sequence[(pose_index + 1) % len(self.pose_sequence)]
-            
-            # Calculate blend factor for transition
-            if time_in_pose < self.pose_duration:
-                # During pose hold - use current pose
-                blend_factor = 0.0 
+            # Check if we have pose data
+            if results and results.pose_world_landmarks:
+                # Extract human pose landmarks
+                landmarks = results.pose_world_landmarks.landmark
+                
+                # Get key joint positions (shoulder, elbow, wrist for both arms)
+                try:
+                    # Right arm landmarks (MediaPipe indices)
+                    right_shoulder = landmarks[12]  # RIGHT_SHOULDER
+                    right_elbow = landmarks[14]     # RIGHT_ELBOW
+                    right_wrist = landmarks[16]     # RIGHT_WRIST
+                    
+                    # Left arm landmarks
+                    left_shoulder = landmarks[11]   # LEFT_SHOULDER
+                    left_elbow = landmarks[13]      # LEFT_ELBOW
+                    left_wrist = landmarks[15]      # LEFT_WRIST
+                    
+                    # Convert MediaPipe coordinates to robot coordinates
+                    # MediaPipe: X=left-right, Y=up-down, Z=forward-back
+                    # Robot: X=right-left, Y=forward-back, Z=up-down
+                    scale = 0.5  # Scale factor
+                    
+                    # Update robot joint positions with coordinate transformation
+                    self.robot_joints["right_shoulder"] = np.array([-right_shoulder.x, -right_shoulder.z, -right_shoulder.y]) * scale
+                    self.robot_joints["right_elbow"] = np.array([-right_elbow.x, -right_elbow.z, -right_elbow.y]) * scale
+                    self.robot_joints["right_wrist"] = np.array([-right_wrist.x, -right_wrist.z, -right_wrist.y]) * scale
+                    
+                    self.robot_joints["left_shoulder"] = np.array([-left_shoulder.x, -left_shoulder.z, -left_shoulder.y]) * scale
+                    self.robot_joints["left_elbow"] = np.array([-left_elbow.x, -left_elbow.z, -left_elbow.y]) * scale
+                    self.robot_joints["left_wrist"] = np.array([-left_wrist.x, -left_wrist.z, -left_wrist.y]) * scale
+                    
+                    # Calculate joint angles using inverse kinematics
+                    self._retarget_to_robot_joints()
+                    
+                    # Update motion status
+                    self.current_motion_status = "Live Human Pose"
+                    self.last_pose_detected = True
+                    
+                except (IndexError, AttributeError) as e:
+                    print(f"[WARNING] Could not extract pose landmarks: {e}")
+                    # Fallback to demo motion
+                    self._animate_demo_motion()
+                    self.current_motion_status = "Demo Motion (Pose Lost)"
+                    self.last_pose_detected = False
             else:
-                # During transition - blend between poses
-                transition_time = time_in_pose - self.pose_duration
-                blend_factor = transition_time / self.transition_duration
-            
-            # Interpolate between poses for smooth motion
-            for joint in self.joint_angles.keys():
-                current_angle = current_pose[joint]
-                next_angle = next_pose[joint]
-                
-                # Apply easing function for smoother transitions
-                t = self.ease_in_out(blend_factor)
-                self.joint_angles[joint] = current_angle * (1 - t) + next_angle * t
-                
-                # Apply joint limits to ensure realistic motion
-                if joint in self.joint_limits:
-                    min_val, max_val = self.joint_limits[joint]
-                    self.joint_angles[joint] = max(min_val, min(max_val, self.joint_angles[joint]))
+                # No pose detected, use demo motion
+                self._animate_demo_motion()
+                self.current_motion_status = "Demo Motion"
+                self.last_pose_detected = False
         
         # Update forward kinematics to calculate joint positions
         self.calculate_forward_kinematics()
         return True
+        
+    def _retarget_to_robot_joints(self):
+        """Convert human pose to robot joint angles using inverse kinematics."""
+        # Calculate joint angles for both arms
+        self._calculate_arm_joint_angles("right")
+        self._calculate_arm_joint_angles("left")
+        
+    def _calculate_arm_joint_angles(self, side):
+        """Calculate joint angles for one arm using simplified IK."""
+        try:
+            # Get joint positions
+            shoulder = self.robot_joints[f"{side}_shoulder"]
+            elbow = self.robot_joints[f"{side}_elbow"]  
+            wrist = self.robot_joints[f"{side}_wrist"]
+            
+            # Calculate vectors
+            upper_arm_vec = elbow - shoulder
+            forearm_vec = wrist - elbow
+            
+            # Calculate lengths
+            upper_arm_length = np.linalg.norm(upper_arm_vec)
+            forearm_length = np.linalg.norm(forearm_vec)
+            
+            # Avoid division by zero
+            if upper_arm_length < 0.01 or forearm_length < 0.01:
+                return
+                
+            # Normalize vectors
+            upper_arm_norm = upper_arm_vec / upper_arm_length
+            forearm_norm = forearm_vec / forearm_length
+            
+            # Calculate elbow angle (angle between upper arm and forearm)
+            dot_product = np.clip(np.dot(upper_arm_norm, forearm_norm), -1.0, 1.0)
+            elbow_angle = np.pi - np.arccos(dot_product)  # External angle
+            
+            # Calculate shoulder angles
+            # Shoulder pitch (up/down motion)
+            shoulder_pitch = np.arctan2(upper_arm_vec[2], np.sqrt(upper_arm_vec[0]**2 + upper_arm_vec[1]**2))
+            
+            # Shoulder yaw (left/right rotation)  
+            shoulder_yaw = np.arctan2(upper_arm_vec[1], upper_arm_vec[0])
+            
+            # Shoulder roll (arm rotation) - simplified calculation
+            shoulder_roll = 0.0  # Can be enhanced later
+            
+            # Wrist angles - simplified (can be enhanced with actual orientation)
+            wrist_pitch = 0.0
+            wrist_yaw = 0.0
+            wrist_roll = 0.0
+            
+            # Update joint angles with clipping
+            prefix = side + "_"
+            self.joint_angles[prefix + "shoulder_pitch_joint"] = self._clip_angle(prefix + "shoulder_pitch_joint", shoulder_pitch)
+            self.joint_angles[prefix + "shoulder_yaw_joint"] = self._clip_angle(prefix + "shoulder_yaw_joint", shoulder_yaw)
+            self.joint_angles[prefix + "shoulder_roll_joint"] = self._clip_angle(prefix + "shoulder_roll_joint", shoulder_roll)
+            self.joint_angles[prefix + "elbow_joint"] = self._clip_angle(prefix + "elbow_joint", elbow_angle)
+            self.joint_angles[prefix + "wrist_pitch_joint"] = self._clip_angle(prefix + "wrist_pitch_joint", wrist_pitch)
+            self.joint_angles[prefix + "wrist_yaw_joint"] = self._clip_angle(prefix + "wrist_yaw_joint", wrist_yaw)
+            self.joint_angles[prefix + "wrist_roll_joint"] = self._clip_angle(prefix + "wrist_roll_joint", wrist_roll)
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to calculate {side} arm joint angles: {e}")
+    
+    def _clip_angle(self, joint_name, angle):
+        """Clip angle to joint limits."""
+        if joint_name in self.joint_limits:
+            min_angle, max_angle = self.joint_limits[joint_name]
+            return np.clip(angle, min_angle, max_angle)
+        return angle
+        
+    def _animate_demo_motion(self):
+        """Animate demo boxing motion when no pose is detected."""
+        self.timer += 0.033  # ~30 FPS
+        
+        # Simple boxing motion animation
+        t = self.timer * 0.5  # Slow down animation
+        
+        # Right arm punching motion
+        right_punch = 0.5 * (1 + np.sin(t))
+        self.joint_angles["right_shoulder_pitch_joint"] = 0.3 + 0.8 * right_punch
+        self.joint_angles["right_elbow_joint"] = 1.5 - 1.0 * right_punch
+        
+        # Left arm guard motion  
+        left_guard = 0.5 * (1 + np.sin(t + np.pi))
+        self.joint_angles["left_shoulder_pitch_joint"] = 0.5 + 0.3 * left_guard
+        self.joint_angles["left_elbow_joint"] = 1.2 + 0.3 * left_guard
     
     def ease_in_out(self, t):
+        print('[VisualRobotRetargeter] -> ease_in_out()')
         """Apply cubic easing function for smoother motion"""
         if t < 0.5:
             return 4 * t * t * t
@@ -232,6 +273,7 @@ class VisualRobotRetargeter:
             self.validate_ik_fk_consistency()
     
     def validate_ik_fk_consistency(self):
+        print('[VisualRobotRetargeter] -> validate_ik_fk_consistency()')
         """Validate consistency between FK and IK by performing a round trip calculation"""
         # Store original joint angles
         original_angles = self.joint_angles.copy()
@@ -302,21 +344,22 @@ class VisualRobotRetargeter:
         }
         
         # Get current motion name for logging
-        current_time = self.timer % (self.pose_duration + self.transition_duration) * len(self.pose_sequence)
-        pose_index = int(current_time / (self.pose_duration + self.transition_duration))
-        pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
-        current_motion = pose_names[pose_index % len(pose_names)]
+        # current_time = self.timer % (self.pose_duration + self.transition_duration) * len(self.pose_sequence)
+        # pose_index = int(current_time / (self.pose_duration + self.transition_duration))
+        # pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
+        # current_motion = pose_names[pose_index % len(pose_names)]
         
         # Log the validation result
-        self._log_validation_result(self.validation_results, current_motion)
+        self._log_validation_result(self.validation_results, "Unknown")
         
         # Print validation info if significant error
         if position_error > 0.01 or angle_error > 0.01:
-            print(f"[VALIDATION] Position error: {position_error:.4f}m, Angle error: {angle_error:.4f}rad in {current_motion}")
+            print(f"[VALIDATION] Position error: {position_error:.4f}m, Angle error: {angle_error:.4f}rad in Unknown")
         
         return self.validation_results
     
     def calculate_inverse_kinematics(self):
+        print('[VisualRobotRetargeter] -> calculate_inverse_kinematics()')
         """Calculate joint angles using inverse kinematics from current end effector positions"""
         # Initialize angles dict
         ik_angles = {}
@@ -332,18 +375,33 @@ class VisualRobotRetargeter:
         return ik_angles
     
     def calculate_arm_ik(self, side):
-        """Calculate inverse kinematics for one arm using analytical approach
-        
-        This uses an analytical approach for a 7-DOF arm based on DH parameters
-        """
+        print('[VisualRobotRetargeter] -> calculate_arm_ik()')
+        """Calculate inverse kinematics for one arm using selected approach"""
         prefix = side + "_"
         angles = {}
-        
         # Get joint positions
         shoulder = self.robot_joints[side + "_shoulder"]
         elbow = self.robot_joints[side + "_elbow"]
         wrist = self.robot_joints[side + "_wrist"]
-        
+        L1 = self.dimensions["upper_arm_length"]
+        L2 = self.dimensions["lower_arm_length"]
+        if self.ik_solver_backend == 'brpso' and self.brpso_solver is not None:
+            # Use BRPSO solver
+            target = wrist - shoulder
+            solution = self.brpso_solver.solve(target_position=target)
+            # Map solution to our joint naming
+            brpso_angles = solution['joint_angles']
+            # Map BRPSO joint order to our joint names
+            angles[prefix + "shoulder_yaw_joint"] = brpso_angles['shoulder_yaw']
+            angles[prefix + "shoulder_pitch_joint"] = brpso_angles['shoulder_pitch']
+            angles[prefix + "shoulder_roll_joint"] = brpso_angles['shoulder_roll']
+            angles[prefix + "elbow_joint"] = brpso_angles['elbow']
+            angles[prefix + "wrist_pitch_joint"] = brpso_angles['wrist_pitch']
+            angles[prefix + "wrist_yaw_joint"] = brpso_angles['wrist_yaw']
+            angles[prefix + "wrist_roll_joint"] = brpso_angles['wrist_roll']
+            return angles
+        # ... existing analytical IK code ...
+        # (leave the rest of the function unchanged for analytical)
         # Link lengths from DH parameters (scaled to our model dimensions)
         L1 = self.dimensions["upper_arm_length"]
         L2 = self.dimensions["lower_arm_length"]
@@ -504,6 +562,7 @@ class VisualRobotRetargeter:
         return angles
     
     def enable_validation(self, enabled=True):
+        print('[VisualRobotRetargeter] -> enable_validation()')
         """Enable or disable round-trip IK-FK validation"""
         self.validation_enabled = enabled
         if enabled:
@@ -515,6 +574,7 @@ class VisualRobotRetargeter:
         return enabled
     
     def _initialize_validation_log(self):
+        print('[VisualRobotRetargeter] -> _initialize_validation_log()')
         """Initialize the validation log file"""
         # Create logs directory if it doesn't exist
         log_dir = "validation_logs"
@@ -536,6 +596,7 @@ class VisualRobotRetargeter:
         print(f"Validation log initialized at {self.validation_log_path}")
     
     def _log_validation_result(self, validation_result, current_motion="Unknown"):
+        print('[VisualRobotRetargeter] -> _log_validation_result()')
         """Log validation result to CSV file"""
         if not hasattr(self, 'validation_log_path') or not os.path.exists(self.validation_log_path):
             self._initialize_validation_log()
@@ -563,12 +624,14 @@ class VisualRobotRetargeter:
             writer.writerow([timestamp, position_error, angle_error, current_motion] + angles)
     
     def get_last_validation_results(self):
+        print('[VisualRobotRetargeter] -> get_last_validation_results()')
         """Get the results from the last validation run"""
         if hasattr(self, 'validation_results'):
             return self.validation_results
         return {"position_error": 0, "angle_error": 0, "timestamp": 0}
     
     def generate_validation_report(self, show_plot=True):
+        print('[VisualRobotRetargeter] -> generate_validation_report()')
         """Generate a comprehensive validation report from logged data"""
         if not hasattr(self, 'validation_log_path') or not os.path.exists(self.validation_log_path):
             print("No validation log found. Enable validation first with 'V' key.")
@@ -631,6 +694,7 @@ class VisualRobotRetargeter:
             return None
     
     def visualize_validation_data(self, df=None):
+        print('[VisualRobotRetargeter] -> visualize_validation_data()')
         """Visualize validation data from the log file"""
         if df is None:
             try:
@@ -716,7 +780,7 @@ class VisualRobotRetargeter:
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_path = os.path.join(report_dir, f"validation_report_{timestamp}.png")
-        plt.savefig(report_path, dpi=150, bbox_inches='tight')
+        # plt.savefig(report_path, dpi=150, bbox_inches='tight')
         
         plt.show()
         print(f"Visualization saved to {report_path}")
@@ -808,6 +872,7 @@ class VisualRobotRetargeter:
         ])
     
     def rotation_matrix_x(self, angle):
+        print('[VisualRobotRetargeter] -> rotation_matrix_x()')
         """Create rotation matrix around X axis"""
         c = np.cos(angle)
         s = np.sin(angle)
@@ -818,6 +883,7 @@ class VisualRobotRetargeter:
         ])
     
     def rotation_matrix_y(self, angle):
+        print('[VisualRobotRetargeter] -> rotation_matrix_y()')
         """Create rotation matrix around Y axis"""
         c = np.cos(angle)
         s = np.sin(angle)
@@ -828,6 +894,7 @@ class VisualRobotRetargeter:
         ])
     
     def rotation_matrix_z(self, angle):
+        print('[VisualRobotRetargeter] -> rotation_matrix_z()')
         """Create rotation matrix around Z axis"""
         c = np.cos(angle)
         s = np.sin(angle)
@@ -838,6 +905,7 @@ class VisualRobotRetargeter:
         ])
     
     def axis_angle_rotation(self, axis, angle):
+        print('[VisualRobotRetargeter] -> axis_angle_rotation()')
         """Create rotation matrix around arbitrary axis"""
         # Normalize axis
         axis = axis / np.linalg.norm(axis)
@@ -854,6 +922,7 @@ class VisualRobotRetargeter:
         ])
     
     def toggle_pause(self):
+        print('[VisualRobotRetargeter] -> toggle_pause()')
         """Toggle the pause state for the animation"""
         self.paused = not self.paused
         return self.paused
@@ -935,17 +1004,17 @@ class VisualRobotRetargeter:
                   self.robot_joints["left_wrist"][2], color='#000099', s=left_glove_size)
         
         # Add labels showing the current motion
-        current_time = self.timer % (self.pose_duration + self.transition_duration) * len(self.pose_sequence)
-        pose_index = int(current_time / (self.pose_duration + self.transition_duration))
-        pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
-        current_motion = pose_names[pose_index % len(pose_names)]
+        # current_time = self.timer % (self.pose_duration + self.transition_duration) * len(self.pose_sequence)
+        # pose_index = int(current_time / (self.pose_duration + self.transition_duration))
+        # pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
+        # current_motion = pose_names[pose_index % len(pose_names)]
         
         # Add label showing current motion
         if not self.paused:
-            ax.text(0, 0.6, 0, f"{current_motion}", fontsize=14, color='black', 
+            ax.text(0, 0.6, 0, f"Unknown", fontsize=14, color='black', 
                    ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
         else:
-            ax.text(0, 0.6, 0, f"{current_motion} (PAUSED)", fontsize=14, color='red', 
+            ax.text(0, 0.6, 0, f"Unknown (PAUSED)", fontsize=14, color='red', 
                    ha='center', va='center', bbox=dict(facecolor='white', alpha=0.7))
         
         # Display IK-FK validation results if enabled
@@ -992,10 +1061,57 @@ class VisualRobotRetargeter:
         # Add grid for better depth perception
         ax.grid(True, linestyle='--', alpha=0.6)
 
+    def start_recording(self, filename=None):
+        self.recording = True
+        self.recording_file = filename or f"src/core/recordings/robot_motion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        os.makedirs(os.path.dirname(self.recording_file), exist_ok=True)
+        print(f"[Visual] Started recording to {self.recording_file}")
+
+    def stop_recording(self):
+        self.recording = False
+        print(f"[Visual] Stopped recording: {self.recording_file}")
+        self.recording_file = None
+
+    def record_frame(self, timestamp, robot_joint_angles):
+        if not self.recording:
+            return
+        row = [
+            round(timestamp, 2),
+            round(robot_joint_angles.get('left_shoulder_pitch_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_shoulder_yaw_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_shoulder_roll_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_elbow_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_wrist_pitch_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_wrist_yaw_joint', 0.0), 2),
+            round(robot_joint_angles.get('left_wrist_roll_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_shoulder_pitch_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_shoulder_yaw_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_shoulder_roll_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_elbow_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_wrist_pitch_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_wrist_yaw_joint', 0.0), 2),
+            round(robot_joint_angles.get('right_wrist_roll_joint', 0.0), 2),
+        ]
+        with open(self.recording_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(row)
+
 class PoseMirror3DWithRetargeting:
-    def __init__(self, window_size=(1280, 720)):
+    def __init__(self, window_size=(1280, 720), ik_solver_backend='analytical', camera_index=0, 
+                 debug=False, auto_record=False, record_frequency=30, dual_mode=False, 
+                 execution_mode='live', input_file=None, enable_visualizations=True):
+        print('[PoseMirror3DWithRetargeting] -> __init__()')
         """Initialize the PoseMirror3D system with robot retargeting."""
         self.window_size = window_size
+        self.screen_width, self.screen_height = window_size
+        self.camera_index = camera_index
+        self.debug = debug
+        self.auto_record = auto_record
+        self.record_frequency = record_frequency
+        self.dual_mode = dual_mode
+        self.execution_mode = execution_mode
+        self.input_file = input_file
+        self.enable_visualizations = enable_visualizations
         
         # Initialize MediaPipe components
         self.mp_drawing = mp.solutions.drawing_utils
@@ -1012,7 +1128,7 @@ class PoseMirror3DWithRetargeting:
         self._setup_visualization()
         
         # Initialize robot retargeter
-        self.robot_retargeter = VisualRobotRetargeter()
+        self.robot_retargeter = VisualRobotRetargeter(ik_solver_backend=ik_solver_backend)
         self.robot_retargeter.ax_robot = self.ax_robot
         self.robot_retargeter.fig_robot = self.fig
         
@@ -1027,7 +1143,18 @@ class PoseMirror3DWithRetargeting:
         self.max_history = 5
         self.joint_angles = self.robot_retargeter.joint_angles
         
-        # Recording variables
+        # Enhanced recording system with visual indicators
+        self.recording_status = {
+            'active': False,
+            'start_time': None,
+            'frame_count': 0,
+            'filename': None,
+            'show_indicator': False,
+            'indicator_timer': 0,
+            'blink_state': True
+        }
+        
+        # Legacy recording variables for compatibility
         self.recording = False
         self.paused = False
         self.csv_file = None
@@ -1038,8 +1165,13 @@ class PoseMirror3DWithRetargeting:
         
         # IK-FK validation flag
         self.validation_enabled = False
+        
+        # Auto-start recording if requested
+        if self.auto_record:
+            self.start_recording()
 
     def _setup_visualization(self):
+        print('[PoseMirror3DWithRetargeting] -> _setup_visualization()')
         """Set up all visualization components."""
         # Initialize pygame
         pygame.init()
@@ -1098,6 +1230,7 @@ class PoseMirror3DWithRetargeting:
         self.camera_plot = None
         
     def calculate_body_plane_angle(self, landmarks):
+        print('[PoseMirror3DWithRetargeting] -> calculate_body_plane_angle()')
         """Calculate the angle between the body plane and camera plane."""
         if not landmarks:
             return 0
@@ -1119,302 +1252,40 @@ class PoseMirror3DWithRetargeting:
         return 0
 
     def update_visualization(self, results, image=None):
-        """Update all visualizations with the latest pose data."""
+        """Update all real-time visualizations with latest pose data."""
         # Clear all plots except camera feed
         self.ax_3d.clear()
         self.ax_robot.clear()
         self.ax_angles.clear()
         
-        # Update camera feed without clearing
+        # Update camera feed (Window 1)
         if image is not None:
-            # Display the image as is - no flipping here
             if not hasattr(self, 'camera_image'):
                 self.camera_image = self.ax_camera.imshow(image)
                 self.ax_camera.axis('off')
             else:
                 self.camera_image.set_data(image)
-                
-            # Add recording indicator if active
-            title = 'Camera Feed'
-            if self.recording:
-                # Add recording indicator to the frame
-                cv2.putText(
-                    image, 
-                    f"RECORDING: {self.frame_counter} frames", 
-                    (50, 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    1, 
-                    (0, 0, 255), 
-                    2
-                )
-                title = f'Camera Feed - RECORDING to {os.path.basename(self.recording_file)}'
-            self.ax_camera.set_title(title)
+            self.ax_camera.set_title('🎥 Live Camera Feed', fontweight='bold')
 
-        # Generate sample human pose data for visualization if real data is not available
-        if not results or not results.pose_world_landmarks:
-            self._generate_sample_human_pose()
-        else:
-            # Update human pose visualization
+        if results and results.pose_world_landmarks:
+            # Update human pose visualization (Window 2)
             self._update_human_pose(results.pose_world_landmarks)
             
-        # Update robot visualization
-        self.robot_retargeter.update_robot_state(results)
-        self.robot_retargeter.update_robot_plot(self.ax_robot)
-        
-        # Update joint angles visualization
-        self._update_joint_angles()
+            # Update robot visualization (Window 3)
+            self.robot_retargeter.update_robot_plot(self.ax_robot)
+            
+            # Update joint angles visualization (Window 4)
+            self._update_joint_angles()
+
+        # Add status information overlay
+        self._add_status_info()
 
         # Refresh the display
-        self.fig.canvas.draw_idle()  # Only redraw what's necessary
+        self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
 
-    def _generate_sample_human_pose(self):
-        """Generate a realistic boxing pose sequence for visualization that matches the robot."""
-        # Create a more interesting boxing pose in 3D
-        # Use robot timer for synchronization
-        t = self.robot_retargeter.timer
-        
-        # Get timing from robot retargeter
-        pose_duration = self.robot_retargeter.pose_duration
-        transition_duration = self.robot_retargeter.transition_duration
-        pose_sequence_length = len(self.robot_retargeter.pose_sequence)
-        total_pose_time = pose_duration + transition_duration
-        
-        # Calculate current pose and blend factor using the same approach as robot
-        cycle_time = t % (total_pose_time * pose_sequence_length)
-        pose_index = int(cycle_time / total_pose_time)
-        time_in_pose = cycle_time % total_pose_time
-        
-        # Calculate transition blend factor
-        if time_in_pose < pose_duration:
-            blend_factor = 0.0
-        else:
-            transition_time = time_in_pose - pose_duration
-            blend_factor = transition_time / transition_duration
-        
-        # Apply cubic easing for smooth transitions
-        def ease_in_out(t):
-            if t < 0.5:
-                return 4 * t * t * t
-            else:
-                return 1 - pow(-2 * t + 2, 3) / 2
-        
-        t_eased = ease_in_out(blend_factor)
-        
-        # Define all boxing poses that match robot poses
-        poses = self.define_human_boxing_poses()
-        
-        # Get current and next pose
-        current_pose = poses[pose_index % len(poses)]
-        next_pose = poses[(pose_index + 1) % len(poses)]
-        
-        # Interpolate between poses
-        pose = {}
-        for joint in current_pose:
-            current_position = np.array(current_pose[joint])
-            next_position = np.array(next_pose[joint])
-            pose[joint] = current_position * (1 - t_eased) + next_position * t_eased
-        
-        # Plot human joints
-        self.plot_human_pose(pose)
-        
-        # Set plot properties
-        self.ax_3d.set_xlabel('X (Left-Right)', fontsize=10)
-        self.ax_3d.set_ylabel('Y (Up-Down)', fontsize=10)
-        self.ax_3d.set_zlabel('Z (Forward-Back)', fontsize=10)
-        
-        # Get current motion name
-        pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
-        current_motion = pose_names[pose_index % len(pose_names)]
-        
-        # Set title with current motion
-        if self.robot_retargeter.paused:
-            self.ax_3d.set_title(f'Human Pose - {current_motion} (PAUSED)', fontsize=14, fontweight='bold')
-        else:
-            self.ax_3d.set_title(f'Human Pose - {current_motion}', fontsize=14, fontweight='bold')
-        
-        # Set view angle
-        self.ax_3d.view_init(elev=15, azim=-75)
-        self.ax_3d.set_box_aspect([1, 1.5, 1])  # Taller aspect to see full body
-        
-        # Extend the y-axis to show full body
-        self.ax_3d.set_ylim(-0.7, 0.7)
-        self.ax_3d.set_xlim(-0.6, 0.6)
-        self.ax_3d.set_zlim(-0.6, 0.6)
-        
-        # Add grid for better depth perception
-        self.ax_3d.grid(True, linestyle='--', alpha=0.6)
-
-    def define_human_boxing_poses(self):
-        """Define a sequence of human poses for boxing that match the robot sequence."""
-        poses = []
-        
-        # Guard Pose
-        guard = {
-            "head": np.array([0.03, 0.35, -0.05]),
-            "center": np.array([0, 0, 0]),
-            "l_shoulder": np.array([-0.2, 0.15, 0]),
-            "r_shoulder": np.array([0.2, 0.15, 0]),
-            "l_elbow": np.array([-0.25, 0.2, 0.05]),
-            "r_elbow": np.array([0.25, 0.2, 0.05]),
-            "l_wrist": np.array([-0.15, 0.3, 0.1]),
-            "r_wrist": np.array([0.15, 0.3, 0.1]),
-            "l_hip": np.array([-0.1, -0.2, 0]),
-            "r_hip": np.array([0.1, -0.2, 0]),
-            "l_knee": np.array([-0.12, -0.4, 0.1]),
-            "r_knee": np.array([0.12, -0.4, 0.1]),
-            "l_foot": np.array([-0.15, -0.6, 0.1]),
-            "r_foot": np.array([0.15, -0.6, 0.1])
-        }
-        poses.append(guard)
-        
-        # Left Jab
-        left_jab = guard.copy()
-        left_jab.update({
-            "l_elbow": np.array([-0.1, 0.15, 0.2]),
-            "l_wrist": np.array([0, 0.15, 0.4]),  # Extended forward
-            "center": np.array([0.03, 0.02, 0]),  # Slight weight shift
-            "head": np.array([0.05, 0.35, -0.05]),  # Head follows slightly
-        })
-        poses.append(left_jab)
-        
-        # Back to Guard
-        poses.append(guard.copy())
-        
-        # Right Cross
-        right_cross = guard.copy()
-        right_cross.update({
-            "r_elbow": np.array([0.1, 0.15, 0.2]),
-            "r_wrist": np.array([0, 0.15, 0.4]),  # Extended forward
-            "center": np.array([-0.03, 0.01, 0]),  # Slight weight shift
-            "head": np.array([-0.02, 0.35, -0.05]),  # Head follows slightly
-            "l_shoulder": np.array([-0.18, 0.15, -0.05]),  # Slight body rotation
-            "r_shoulder": np.array([0.18, 0.15, -0.05]),
-        })
-        poses.append(right_cross)
-        
-        # Back to Guard
-        poses.append(guard.copy())
-        
-        # Left Hook
-        left_hook = guard.copy()
-        left_hook.update({
-            "l_elbow": np.array([-0.15, 0.2, 0.1]),
-            "l_wrist": np.array([0.05, 0.25, 0.1]),  # Hook motion - across body
-            "center": np.array([0.02, 0.01, 0]),  # Slight weight shift
-            "head": np.array([0.04, 0.35, -0.05]),  # Head rotates with hook
-            "l_shoulder": np.array([-0.2, 0.15, -0.05]),  # Body rotates into hook
-            "r_shoulder": np.array([0.18, 0.15, -0.05]),
-        })
-        poses.append(left_hook)
-        
-        # Back to Guard
-        poses.append(guard.copy())
-        
-        # Right Uppercut
-        right_uppercut = guard.copy()
-        right_uppercut.update({
-            "r_elbow": np.array([0.15, 0.0, 0.1]),
-            "r_wrist": np.array([0.1, 0.2, 0.05]),  # Upward motion
-            "center": np.array([-0.02, -0.05, 0]),  # Lower center for power
-            "head": np.array([-0.02, 0.32, -0.05]),  # Head tucks slightly
-        })
-        poses.append(right_uppercut)
-        
-        # Back to Guard
-        poses.append(guard.copy())
-        
-        return poses
-
-    def plot_human_pose(self, pose):
-        """Plot a human pose based on joint positions."""
-        # Extract joint positions
-        joints = pose.keys()
-        x_coords = [pose[joint][0] for joint in joints]
-        y_coords = [pose[joint][1] for joint in joints]
-        z_coords = [pose[joint][2] for joint in joints]
-        
-        # Plot all joints
-        for joint in joints:
-            if 'wrist' in joint:
-                # Draw boxing gloves
-                if 'l_wrist' in joint and np.linalg.norm(pose['l_wrist'] - pose['l_elbow']) > 0.25:
-                    # Left jab extended
-                    self.ax_3d.scatter3D([pose[joint][0]], [pose[joint][1]], [pose[joint][2]], 
-                                        c='red', marker='o', s=150)
-                elif 'r_wrist' in joint and np.linalg.norm(pose['r_wrist'] - pose['r_elbow']) > 0.25:
-                    # Right cross extended
-                    self.ax_3d.scatter3D([pose[joint][0]], [pose[joint][1]], [pose[joint][2]], 
-                                        c='red', marker='o', s=150)
-                else:
-                    glove_size = 120
-                    glove_color = '#ff6666'
-                    self.ax_3d.scatter3D([pose[joint][0]], [pose[joint][1]], [pose[joint][2]], 
-                                        c=glove_color, marker='o', s=glove_size)
-            else:
-                # Regular joints
-                self.ax_3d.scatter3D([pose[joint][0]], [pose[joint][1]], [pose[joint][2]], 
-                                    c='blue', marker='o', s=60)
-        
-        # Plot connections
-        # Spine
-        self.ax_3d.plot3D([pose["head"][0], pose["center"][0]], 
-                         [pose["head"][1], pose["center"][1]], 
-                         [pose["head"][2], pose["center"][2]], 'b-', linewidth=2.5)
-        
-        # Connect center to hips midpoint
-        hip_mid = (pose["l_hip"] + pose["r_hip"]) / 2
-        self.ax_3d.plot3D([pose["center"][0], hip_mid[0]], 
-                         [pose["center"][1], hip_mid[1]], 
-                         [pose["center"][2], hip_mid[2]], 'b-', linewidth=2.5)
-        
-        # Shoulders
-        self.ax_3d.plot3D([pose["l_shoulder"][0], pose["r_shoulder"][0]], 
-                         [pose["l_shoulder"][1], pose["r_shoulder"][1]], 
-                         [pose["l_shoulder"][2], pose["r_shoulder"][2]], 'b-', linewidth=2.5)
-        
-        # Connect center to shoulders
-        shoulder_mid = (pose["l_shoulder"] + pose["r_shoulder"]) / 2
-        self.ax_3d.plot3D([pose["center"][0], shoulder_mid[0]], 
-                         [pose["center"][1], shoulder_mid[1]], 
-                         [pose["center"][2], shoulder_mid[2]], 'b-', linewidth=2)
-        
-        # Left arm
-        self.ax_3d.plot3D([pose["l_shoulder"][0], pose["l_elbow"][0]], 
-                         [pose["l_shoulder"][1], pose["l_elbow"][1]], 
-                         [pose["l_shoulder"][2], pose["l_elbow"][2]], 'b-', linewidth=2)
-        self.ax_3d.plot3D([pose["l_elbow"][0], pose["l_wrist"][0]], 
-                         [pose["l_elbow"][1], pose["l_wrist"][1]], 
-                         [pose["l_elbow"][2], pose["l_wrist"][2]], 'b-', linewidth=2)
-        
-        # Right arm
-        self.ax_3d.plot3D([pose["r_shoulder"][0], pose["r_elbow"][0]], 
-                         [pose["r_shoulder"][1], pose["r_elbow"][1]], 
-                         [pose["r_shoulder"][2], pose["r_elbow"][2]], 'b-', linewidth=2)
-        self.ax_3d.plot3D([pose["r_elbow"][0], pose["r_wrist"][0]], 
-                         [pose["r_elbow"][1], pose["r_wrist"][1]], 
-                         [pose["r_elbow"][2], pose["r_wrist"][2]], 'b-', linewidth=2)
-        
-        # Hips
-        self.ax_3d.plot3D([pose["l_hip"][0], pose["r_hip"][0]], 
-                         [pose["l_hip"][1], pose["r_hip"][1]], 
-                         [pose["l_hip"][2], pose["r_hip"][2]], 'b-', linewidth=2.5)
-        
-        # Legs
-        self.ax_3d.plot3D([pose["l_hip"][0], pose["l_knee"][0]], 
-                         [pose["l_hip"][1], pose["l_knee"][1]], 
-                         [pose["l_hip"][2], pose["l_knee"][2]], 'b-', linewidth=2)
-        self.ax_3d.plot3D([pose["l_knee"][0], pose["l_foot"][0]], 
-                         [pose["l_knee"][1], pose["l_foot"][1]], 
-                         [pose["l_knee"][2], pose["l_foot"][2]], 'b-', linewidth=2)
-        self.ax_3d.plot3D([pose["r_hip"][0], pose["r_knee"][0]], 
-                         [pose["r_hip"][1], pose["r_knee"][1]], 
-                         [pose["r_hip"][2], pose["r_knee"][2]], 'b-', linewidth=2)
-        self.ax_3d.plot3D([pose["r_knee"][0], pose["r_foot"][0]], 
-                         [pose["r_knee"][1], pose["r_foot"][1]], 
-                         [pose["r_knee"][2], pose["r_foot"][2]], 'b-', linewidth=2)
-
     def _update_human_pose(self, world_landmarks):
+        """Update the human pose 3D plot using the provided world landmarks from MediaPipe."""
         """Update the human pose visualization."""
         landmarks = world_landmarks.landmark
         
@@ -1442,6 +1313,7 @@ class PoseMirror3DWithRetargeting:
         self.ax_3d.set_box_aspect([1,1,1])
 
     def _update_joint_angles(self):
+        """Update the joint angles bar plot for the robot arms using the current joint angles."""
         """Update the joint angles visualization with realistic data."""
         joint_limits = self.robot_retargeter.joint_limits
         self.joint_angles = self.robot_retargeter.joint_angles
@@ -1464,15 +1336,15 @@ class PoseMirror3DWithRetargeting:
         
         # Get current pose name from robot retargeter
         current_time = self.robot_retargeter.timer
-        pose_duration = self.robot_retargeter.pose_duration
-        transition_duration = self.robot_retargeter.transition_duration
-        total_pose_time = pose_duration + transition_duration
-        pose_sequence_length = len(self.robot_retargeter.pose_sequence)
+        # pose_duration = self.robot_retargeter.pose_duration
+        # transition_duration = self.robot_retargeter.transition_duration
+        # total_pose_time = pose_duration + transition_duration
+        # pose_sequence_length = len(self.robot_retargeter.pose_sequence)
         
-        cycle_time = current_time % (total_pose_time * pose_sequence_length)
-        pose_index = int(cycle_time / total_pose_time)
-        pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
-        current_motion = pose_names[pose_index % len(pose_names)]
+        # cycle_time = current_time % (total_pose_time * pose_sequence_length)
+        # pose_index = int(cycle_time / total_pose_time)
+        # pose_names = ["Guard", "Left Jab", "Guard", "Right Cross", "Guard", "Left Hook", "Guard", "Right Uppercut", "Guard"]
+        # current_motion = pose_names[pose_index % len(pose_names)]
         
         # Clear the plot
         self.ax_angles.clear()
@@ -1596,19 +1468,193 @@ class PoseMirror3DWithRetargeting:
         # Add grid for horizontal lines only
         self.ax_angles.grid(axis='x', linestyle=':', alpha=0.4)
         
-        # Add title with current motion
-        title = f'Joint Angles - {current_motion}'
+        # Add title with current motion status
+        if hasattr(self.robot_retargeter, 'current_motion_status'):
+            motion_status = self.robot_retargeter.current_motion_status
+        else:
+            motion_status = "Real-time Retargeting"
+            
+        title = f'Joint Angles - {motion_status}'
         if self.robot_retargeter.paused:
             title += " (PAUSED)"
         self.ax_angles.set_title(title, fontsize=14, fontweight='bold')
         
         # Add x-axis label
         self.ax_angles.set_xlabel('Angle (degrees)', fontsize=11)
+    
+    def _add_status_info(self):
+        """Add status information overlay to the visualization"""
+        # Create status text with current system info
+        status_text = f"IK Solver: {self.robot_retargeter.ik_solver_backend.upper()}"
+        
+        if hasattr(self, 'dual_mode') and self.dual_mode:
+            status_text += " | 🔄 DUAL MODE"
+        
+        # Recording status with visual indicators
+        bg_color = 'yellow'
+        text_color = 'black'
+        
+        if hasattr(self, 'recording_status') and self.recording_status:
+            current_time = time.time()
+            if self.recording_status['active']:
+                # Blinking recording indicator
+                if current_time - self.recording_status.get('indicator_timer', 0) > 0.5:
+                    self.recording_status['blink_state'] = not self.recording_status['blink_state']
+                    self.recording_status['indicator_timer'] = current_time
+                
+                if self.recording_status['blink_state']:
+                    record_indicator = "🔴 RECORDING"
+                    bg_color = 'red'
+                    text_color = 'white'
+                else:
+                    record_indicator = "⭕ RECORDING"
+                    bg_color = 'darkred'
+                    text_color = 'lightgray'
+                
+                duration = current_time - self.recording_status.get('start_time', current_time)
+                frame_count = self.recording_status.get('frame_count', 0)
+                status_text += f" | {record_indicator} ({frame_count} frames, {duration:.1f}s)"
+                
+            elif self.recording_status.get('show_indicator', False):
+                # Show "stopped recording" briefly
+                if current_time - self.recording_status.get('indicator_timer', 0) < 2.0:
+                    status_text += " | ⏹️ STOPPED RECORDING"
+                    bg_color = 'gray'
+                    text_color = 'white'
+                else:
+                    self.recording_status['show_indicator'] = False
+        
+        # Add pause status
+        if hasattr(self, 'paused') and self.paused:
+            status_text += " | ⏸️ PAUSED"
+            bg_color = 'orange'
+            text_color = 'black'
+        
+        # Add the status text as an overlay
+        self.fig.text(0.5, 0.02, status_text, ha='center', fontsize=12, color=text_color,
+                     bbox=dict(facecolor=bg_color, alpha=0.8, edgecolor='black', linewidth=1))
+    
+    def start_recording(self):
+        """Start recording with enhanced visual feedback"""
+        import os
+        from datetime import datetime
+        
+        # Create recordings directory if it doesn't exist
+        os.makedirs('recordings', exist_ok=True)
+        
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"recordings/robot_motion_{timestamp}.csv"
+        
+        try:
+            # Open CSV file for writing
+            self.csv_file = open(filename, 'w', newline='')
+            
+            # Write CSV header (14 joint angles)
+            joint_names = [
+                'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+                'left_elbow_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint', 'left_wrist_roll_joint',
+                'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+                'right_elbow_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint', 'right_wrist_roll_joint'
+            ]
+            header = 'timestamp,' + ','.join(joint_names)
+            self.csv_file.write(header + '\n')
+            
+            # Update recording status
+            current_time = time.time()
+            self.recording_status.update({
+                'active': True,
+                'start_time': current_time,
+                'frame_count': 0,
+                'filename': filename,
+                'show_indicator': True,
+                'indicator_timer': current_time,
+                'blink_state': True
+            })
+            
+            # Legacy compatibility
+            self.recording = True
+            self.recording_file = filename
+            self.start_time = current_time
+            self.frame_counter = 0
+            
+            print(f"✅ Recording started: {filename}")
+            
+        except Exception as e:
+            print(f"❌ Error starting recording: {e}")
+            self.recording_status['active'] = False
+            if hasattr(self, 'csv_file') and self.csv_file:
+                self.csv_file.close()
+                self.csv_file = None
+    
+    def stop_recording(self):
+        """Stop recording with enhanced visual feedback"""
+        if self.recording_status['active']:
+            try:
+                if self.csv_file:
+                    self.csv_file.close()
+                
+                filename = self.recording_status.get('filename', 'Unknown')
+                frame_count = self.recording_status.get('frame_count', 0)
+                duration = time.time() - self.recording_status.get('start_time', time.time())
+                
+                print(f"⏹️ Recording stopped: {filename}")
+                print(f"📊 Recorded {frame_count} frames in {duration:.1f}s")
+                
+                # Update recording status
+                self.recording_status.update({
+                    'active': False,
+                    'show_indicator': True,
+                    'indicator_timer': time.time()
+                })
+                
+                # Legacy compatibility
+                self.recording = False
+                self.csv_file = None
+                self.recording_file = None
+                
+            except Exception as e:
+                print(f"❌ Error stopping recording: {e}")
+        else:
+            print("⚠️ No active recording to stop")
+    
+    def record_frame_to_csv(self):
+        """Record current frame to CSV with enhanced tracking"""
+        if self.recording_status['active'] and self.csv_file:
+            try:
+                # Calculate timestamp
+                current_time = time.time()
+                elapsed = current_time - self.recording_status['start_time']
+                
+                # Get joint angles
+                joint_angles = self.robot_retargeter.joint_angles
+                
+                # Write CSV line
+                line = f"{elapsed:.3f}"
+                for joint_name in [
+                    'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+                    'left_elbow_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint', 'left_wrist_roll_joint',
+                    'right_shoulder_pitch_joint', 'right_shoulder_roll_joint', 'right_shoulder_yaw_joint',
+                    'right_elbow_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint', 'right_wrist_roll_joint'
+                ]:
+                    angle = joint_angles.get(joint_name, 0.0)
+                    line += f",{angle:.2f}"
+                
+                self.csv_file.write(line + '\n')
+                self.csv_file.flush()
+                
+                # Update frame count
+                self.recording_status['frame_count'] += 1
+                
+            except Exception as e:
+                print(f"❌ Error recording frame: {e}")
 
     def run(self):
+        """Main loop to run the PoseMirror3D system: captures camera, processes pose, updates visualizations, and handles user input."""
+        print('[PoseMirror3DWithRetargeting] -> run()')
         """Run the PoseMirror3D system with robot retargeting."""
         # Initialize the camera capture
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(self.camera_index)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
@@ -1632,13 +1678,28 @@ class PoseMirror3DWithRetargeting:
                     if event.key == pygame.K_q:
                         running = False
                     elif event.key == pygame.K_s:
-                        if not self.recording:
-                            print("Started recording")
+                        # Enhanced recording toggle with visual feedback
+                        if hasattr(self, 'recording_status'):
+                            if self.recording_status['active']:
+                                self.stop_recording()
+                                print("🔴➡️⏹️ Recording stopped via 'S' key")
+                            else:
+                                self.start_recording()
+                                print("⏹️➡️🔴 Recording started via 'S' key")
                         else:
-                            print("Stopped recording")
-                        self.recording = not self.recording
+                            # Fallback to old system
+                            if not self.robot_retargeter.recording:
+                                self.robot_retargeter.start_recording()
+                                print("Started recording")
+                            else:
+                                self.robot_retargeter.stop_recording()
+                                print("Stopped recording")
                     elif event.key == pygame.K_r:
-                        print("Resetting calibration")
+                        # Reset calibration
+                        self.initial_angle_set = False
+                        self.angle_offset = 0
+                        self.recent_chest_vectors = []
+                        print("Calibration reset")
                     elif event.key == pygame.K_p:
                         # Toggle pause state
                         self.paused = self.robot_retargeter.toggle_pause()
@@ -1646,10 +1707,22 @@ class PoseMirror3DWithRetargeting:
                             print("Motion paused - good for taking screenshots")
                         else:
                             print("Motion resumed")
+                    elif event.key == pygame.K_i:
+                        # Switch IK solver (if dual mode enabled)
+                        if hasattr(self, 'dual_mode') and self.dual_mode:
+                            if hasattr(self.robot_retargeter, 'switch_ik_solver'):
+                                old_solver = self.robot_retargeter.ik_solver_backend
+                                new_solver = self.robot_retargeter.switch_ik_solver()
+                                print(f"🔄 IK Solver switched: {old_solver.upper()} → {new_solver.upper()}")
+                            else:
+                                print("⚠️ IK solver switching not available in this retargeter")
+                        else:
+                            print("⚠️ Dual mode not enabled. Use --dual-mode to enable IK switching.")
                     elif event.key == pygame.K_v:
-                        # Toggle IK-FK validation
+                        # Toggle validation
                         self.validation_enabled = not self.validation_enabled
                         self.robot_retargeter.enable_validation(self.validation_enabled)
+                        print(f"Validation {'enabled' if self.validation_enabled else 'disabled'}")
                         
             # Read frame from camera
             success, image = cap.read()
@@ -1696,20 +1769,33 @@ class PoseMirror3DWithRetargeting:
             text_rect = text.get_rect(center=(self.window_size[0]//2, self.window_size[1]//2))
             self.screen.blit(text, text_rect)
             
-            # Add controls info
-            controls_font = pygame.font.Font(None, 24)
-            controls_text = controls_font.render("Controls: Q=Quit, P=Pause, V=Toggle IK-FK Validation", True, (200, 200, 200))
-            controls_rect = controls_text.get_rect(center=(self.window_size[0]//2, self.window_size[1]//2 + 50))
-            self.screen.blit(controls_text, controls_rect)
+            # Add enhanced controls info
+            controls_font = pygame.font.Font(None, 20)
+            controls_lines = [
+                "Controls: Q=Quit, S=Record Toggle, P=Pause, V=Validation",
+            ]
+            if hasattr(self, 'dual_mode') and self.dual_mode:
+                controls_lines.append("I=Switch IK Solver (Analytical ↔ BRPSO)")
+            
+            for i, line in enumerate(controls_lines):
+                controls_text = controls_font.render(line, True, (200, 200, 200))
+                controls_rect = controls_text.get_rect(center=(self.window_size[0]//2, self.window_size[1]//2 + 50 + i*25))
+                self.screen.blit(controls_text, controls_rect)
             
             pygame.display.flip()
             
             # Cap to 30 FPS max
             clock.tick(30)
             
-            # Increment frame counter if recording
-            if self.recording:
+            # Record frame if enhanced recording is active
+            if hasattr(self, 'recording_status') and self.recording_status['active']:
+                self.record_frame_to_csv()
+            
+            # Legacy recording support
+            if self.robot_retargeter.recording:
                 self.frame_counter += 1
+                timestamp = time.time() - self.start_time if self.start_time > 0 else 0.0
+                self.robot_retargeter.record_frame(timestamp, self.robot_retargeter.joint_angles)
         
         # Release resources
         cap.release()

@@ -1,0 +1,25 @@
+2025-07-05 16:51:23,408 - __main__ - INFO - Starting enhanced validation and logging demonstration
+2025-07-05 16:51:23,420 - __main__ - INFO - Created validation logs directory: validation_logs
+2025-07-05 16:51:23,431 - __main__ - INFO - Created sample validation log: validation_logs/demo_validation_20250705_165123.csv
+2025-07-05 16:51:23,441 - __main__ - INFO - Log file validation successful: validation_logs/demo_validation_20250705_165123.csv
+2025-07-05 16:51:23,442 - __main__ - DEBUG - This is a DEBUG message - detailed information for debugging
+2025-07-05 16:51:23,442 - __main__ - INFO - This is an INFO message - general information about program execution
+2025-07-05 16:51:23,443 - __main__ - WARNING - This is a WARNING message - something unexpected happened
+2025-07-05 16:51:23,443 - __main__ - ERROR - This is an ERROR message - a serious problem occurred
+2025-07-05 16:51:23,443 - __main__ - INFO - Starting IK calculation for right arm
+2025-07-05 16:51:23,443 - __main__ - DEBUG - Input joint positions - Shoulder: [0.18, 0.0, 0.0], Elbow: [0.18, -0.25, 0.0]
+2025-07-05 16:51:23,443 - __main__ - DEBUG - Calculated arm lengths - Upper: 0.2800m, Forearm: 0.2600m
+2025-07-05 16:51:23,443 - __main__ - DEBUG - Elbow angle calculated: 1.2345rad (70.7°)
+2025-07-05 16:51:23,443 - __main__ - INFO - IK calculation completed successfully
+2025-07-05 16:51:23,443 - __main__ - ERROR - IK calculation failed: Simulated IK calculation error
+Traceback (most recent call last):
+  File "/Users/krishnamadhavaram/Desktop/Real_Steel/demo_enhanced_features.py", line 214, in demonstrate_enhanced_logging
+    raise ValueError("Simulated IK calculation error")
+ValueError: Simulated IK calculation error
+2025-07-05 16:51:23,444 - __main__ - DEBUG - Low error motion: Guard - Pos: 0.0020m, Ang: 0.0150rad
+2025-07-05 16:51:23,444 - __main__ - INFO - Moderate error motion: Left Jab - Pos: 0.0080m, Ang: 0.0250rad
+2025-07-05 16:51:23,444 - __main__ - WARNING - High error motion: Right Cross - Pos: 0.0120m, Ang: 0.0350rad
+2025-07-05 16:51:23,444 - __main__ - INFO - Moderate error motion: Left Hook - Pos: 0.0060m, Ang: 0.0200rad
+2025-07-05 16:51:23,445 - __main__ - WARNING - High error motion: Right Uppercut - Pos: 0.0150m, Ang: 0.0400rad
+2025-07-05 16:51:23,445 - __main__ - INFO - Validation complete - Avg Pos: 0.008600m, Avg Ang: 0.027000rad
+2025-07-05 16:51:23,445 - __main__ - INFO - Demonstration completed successfully

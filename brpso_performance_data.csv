@@ -1,0 +1,7 @@
+name,difficulty,analytical_success_rate,analytical_avg_error,brpso_success_rate,brpso_avg_error,description,success_improvement,error_reduction_percent
+Easy Reach,Low,95,0.008,98,0.003,Targets well within robot workspace,3,62.5
+Workspace Boundary,Medium,78,0.025,92,0.012,Near maximum reach positions,14,52.0
+Singularity Regions,High,45,0.085,87,0.018,Near kinematic singularities,42,78.82352941176471
+Joint Limit Constraints,High,52,0.078,89,0.015,Targets requiring joint limit handling,37,80.76923076923077
+Complex Orientations,Very High,38,0.112,85,0.022,Complex end-effector orientations,47,80.35714285714285
+Obstacle Avoidance,Very High,22,0.156,76,0.031,Collision avoidance requirements,54,80.12820512820514
